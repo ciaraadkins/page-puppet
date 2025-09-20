@@ -693,26 +693,43 @@ class VoiceController {
 
   setupMessageListeners() {
     log('INFO', 'Setting up message listeners');
-    chrome.runtime.onMessage.addListener((message) => {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       log('INFO', 'Message received from extension', {
         action: message.action,
         hasApiKey: !!message.apiKey
       });
 
-      switch (message.action) {
-        case 'startStreaming':
-          this.startStreamingMode();
-          break;
-        case 'stopStreaming':
-          this.stopStreamingMode();
-          break;
-        case 'toggleStreaming':
-          this.toggleStreamingMode();
-          break;
-        case 'updateApiKey':
-          this.updateApiKey(message.apiKey);
-          break;
+      try {
+        switch (message.action) {
+          case 'startStreaming':
+            this.startStreamingMode().then(() => {
+              sendResponse({ success: true, message: 'Voice control started' });
+            }).catch((error) => {
+              log('ERROR', 'Failed to start streaming', { error: error.message });
+              sendResponse({ success: false, error: error.message });
+            });
+            break;
+          case 'stopStreaming':
+            this.stopStreamingMode();
+            sendResponse({ success: true, message: 'Voice control stopped' });
+            break;
+          case 'toggleStreaming':
+            this.toggleStreamingMode();
+            sendResponse({ success: true, message: 'Voice control toggled' });
+            break;
+          case 'updateApiKey':
+            this.updateApiKey(message.apiKey);
+            sendResponse({ success: true, message: 'API key updated' });
+            break;
+          default:
+            sendResponse({ success: false, error: 'Unknown action' });
+        }
+      } catch (error) {
+        log('ERROR', 'Error processing message', { error: error.message });
+        sendResponse({ success: false, error: error.message });
       }
+
+      return true; // Keep message channel open for async response
     });
   }
 

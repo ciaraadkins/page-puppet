@@ -139,14 +139,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
       chrome.tabs.query({}, (tabs) => {
         log('INFO', 'Notifying content scripts of API key update', { tabCount: tabs.length });
+        let notifiedCount = 0;
+        let failedCount = 0;
+
         tabs.forEach(tab => {
           chrome.tabs.sendMessage(tab.id, {
             action: 'updateApiKey',
             apiKey: apiKey
+          }).then(() => {
+            notifiedCount++;
           }).catch(() => {
-            log('DEBUG', 'Failed to notify tab (expected for non-extension tabs)', { tabId: tab.id });
+            failedCount++;
+            // Only log if we're in debug mode - reduce spam
+            if (failedCount <= 3) {
+              log('DEBUG', 'Failed to notify some tabs (expected for non-extension tabs)');
+            }
           });
         });
+
+        // Summary log after attempts complete
+        setTimeout(() => {
+          log('INFO', 'Tab notification complete', { notifiedCount, failedCount });
+        }, 1000);
       });
     } catch (error) {
       log('ERROR', 'Failed to save settings', {

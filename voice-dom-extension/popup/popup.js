@@ -10,6 +10,11 @@ function log(level, message, data = {}) {
 
   console.log(`[${timestamp}] [${level}] [POPUP] ${message}`, data);
 
+  // Also log errors to console.error for better visibility
+  if (level === 'ERROR') {
+    console.error(`🚨 [POPUP ERROR] ${message}`, data);
+  }
+
   // Store recent logs in local storage for debugging
   try {
     let logs = JSON.parse(localStorage.getItem('voiceControlPopupLogs') || '[]');
@@ -126,30 +131,66 @@ document.addEventListener('DOMContentLoaded', async () => {
       log('INFO', 'Toggling state', { newState: isActive });
 
       const action = isActive ? 'startStreaming' : 'stopStreaming';
+
+      // Add visual feedback immediately
+      if (isActive) {
+        btnText.textContent = 'Starting...';
+        toggleBtn.disabled = true;
+      }
+
       chrome.tabs.sendMessage(tab.id, { action }, (response) => {
         if (chrome.runtime.lastError) {
           log('ERROR', 'Failed to send message to content script', {
             error: chrome.runtime.lastError.message
           });
+
+          // Show error and don't close popup
+          alert(`Failed to communicate with page: ${chrome.runtime.lastError.message}\n\nTry refreshing the page and try again.`);
+          isActive = false; // Revert state
+          toggleBtn.disabled = false;
+          updateUI();
+          return;
+        }
+
+        // Check content script response
+        if (response && response.success) {
+          log('INFO', 'Content script confirmed action success', { response });
+        } else if (response && !response.success) {
+          log('ERROR', 'Content script reported failure', { response });
+          alert(`Voice control failed: ${response.error || 'Unknown error'}`);
+          isActive = false; // Revert state
+          toggleBtn.disabled = false;
+          updateUI();
+          return;
         } else {
-          log('INFO', 'Message sent successfully to content script', { action });
+          log('WARN', 'No response from content script', { response });
+          // Continue anyway - might still work
+        }
+
+        updateUI();
+
+        if (isActive) {
+          log('INFO', 'Voice control started successfully, closing popup in 2000ms (debug delay)');
+          // Increased delay for debugging - you can see any errors
+          setTimeout(() => {
+            window.close();
+          }, 2000);
         }
       });
-
-      updateUI();
-
-      if (isActive) {
-        log('INFO', 'Voice control started, closing popup in 500ms');
-        setTimeout(() => {
-          window.close();
-        }, 500);
-      }
     } catch (error) {
       log('ERROR', 'Error toggling voice control', {
         error: error.message,
         stack: error.stack
       });
-      alert('Error: Please refresh the page and try again.');
+
+      // More detailed error message
+      const errorMsg = `Voice control error: ${error.message}. Check console for details.`;
+      alert(errorMsg);
+
+      // Reset button state
+      isActive = false;
+      toggleBtn.disabled = false;
+      updateUI();
     }
   });
 
