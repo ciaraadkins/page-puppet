@@ -174,11 +174,17 @@ class SpeechProcessor {
       return null;
     }
 
+    // Skip processing very small audio blobs (likely silence or empty audio)
+    if (audioBlob.size < 1024) { // Less than 1KB
+      log('DEBUG', 'Skipping transcription - audio blob too small', { audioSize: audioBlob.size });
+      return null;
+    }
+
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.webm');
-    formData.append('model', 'whisper-1');
+    formData.append('model', 'gpt-4o-mini-transcribe');
     formData.append('response_format', 'text');
-    formData.append('prompt', 'Voice commands for web page manipulation: colors, sizes, visibility, positioning.');
+    formData.append('prompt', 'Voice commands for DOM manipulation. Commands like: make it red, bigger, hide it, rotate, add shadow. Ignore background noise, URLs, or unrelated speech.');
 
     log('DEBUG', 'Sending transcription request to OpenAI');
 
@@ -212,7 +218,8 @@ class SpeechProcessor {
         length: transcript.length,
         duration: `${duration}ms`
       });
-      return transcript.trim();
+      const filteredTranscript = this.filterHallucinations(transcript.trim());
+      return filteredTranscript;
     } catch (error) {
       log('ERROR', 'Transcription failed', {
         error: error.message,
@@ -220,6 +227,83 @@ class SpeechProcessor {
       });
       return null;
     }
+  }
+
+  filterHallucinations(transcript) {
+    if (!transcript || transcript.length < 2) {
+      log('DEBUG', 'Rejecting empty or very short transcript');
+      return null;
+    }
+
+    // Common hallucination patterns to filter out
+    const hallucinationPatterns = [
+      /(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/i, // URLs/domains
+      /thanks?\s+for\s+watching/i,
+      /subscribe\s+and\s+like/i,
+      /hit\s+the\s+bell/i,
+      /notification\s+squad/i,
+      /see\s+you\s+in\s+the\s+next/i,
+      /hamske?y\.com/i,
+      /^\s*[.!?]+\s*$/,  // Just punctuation
+      /^\s*[a-zA-Z]\s*$/,  // Single letter
+      /^\s*\w{1,2}\s*$/,   // Very short random words
+      /music\s*$/i,        // Background music detection
+      /\[music\]/i,
+      /\(music\)/i,
+      // Common default responses that might come from silence
+      /^make it red$/i,
+      /^make it blue$/i,
+      /^make it green$/i,
+      /^make it bigger$/i,
+      /^make it smaller$/i,
+      /^change color$/i,
+      /^hide it$/i,
+      /^show it$/i,
+      /^\s*(red|blue|green|yellow|black|white)\s*$/i, // Single color words
+      /^\s*(bigger|smaller|hide|show)\s*$/i, // Single action words
+      /^\s*color\s*$/i,
+      /^\s*size\s*$/i
+    ];
+
+    for (const pattern of hallucinationPatterns) {
+      if (pattern.test(transcript)) {
+        log('DEBUG', 'Rejecting transcript due to hallucination pattern', {
+          transcript,
+          pattern: pattern.source
+        });
+        return null;
+      }
+    }
+
+    // Reject if transcript is mostly non-alphabetic characters
+    const alphaCount = (transcript.match(/[a-zA-Z]/g) || []).length;
+    const totalCount = transcript.length;
+    if (totalCount > 0 && alphaCount / totalCount < 0.5) {
+      log('DEBUG', 'Rejecting transcript with too few alphabetic characters', {
+        transcript,
+        alphaRatio: alphaCount / totalCount
+      });
+      return null;
+    }
+
+    // Reject overly simple commands that are likely defaults (less than 4 characters)
+    if (transcript.trim().length < 4) {
+      log('DEBUG', 'Rejecting transcript too short to be meaningful command', {
+        transcript,
+        length: transcript.trim().length
+      });
+      return null;
+    }
+
+    // Reject if transcript contains only common filler words
+    const fillerWords = /^\s*(um|uh|ah|er|hmm|well|so|like|you\s+know)\s*$/i;
+    if (fillerWords.test(transcript)) {
+      log('DEBUG', 'Rejecting transcript containing only filler words', { transcript });
+      return null;
+    }
+
+    log('DEBUG', 'Transcript passed hallucination filter', { transcript });
+    return transcript;
   }
 }
 
@@ -796,10 +880,49 @@ class VoiceController {
     log('INFO', 'API key updated and processors reinitialized');
   }
 
+  async detectSilence(audioBlob) {
+    try {
+      // Convert blob to array buffer for analysis
+      const arrayBuffer = await audioBlob.arrayBuffer();
+
+      // Create audio context for analysis
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      // Get audio data from first channel
+      const channelData = audioBuffer.getChannelData(0);
+
+      // Calculate RMS (Root Mean Square) to measure audio level
+      let sum = 0;
+      for (let i = 0; i < channelData.length; i++) {
+        sum += channelData[i] * channelData[i];
+      }
+      const rms = Math.sqrt(sum / channelData.length);
+
+      // Silence threshold - adjust as needed
+      const silenceThreshold = 0.01;
+      const isSilent = rms < silenceThreshold;
+
+      log('DEBUG', 'Audio level analysis', {
+        rms: rms.toFixed(4),
+        threshold: silenceThreshold,
+        isSilent,
+        duration: audioBuffer.duration.toFixed(2) + 's'
+      });
+
+      audioContext.close();
+      return isSilent;
+    } catch (error) {
+      log('WARN', 'Failed to analyze audio for silence, processing anyway', { error: error.message });
+      return false; // If we can't detect silence, process the audio
+    }
+  }
+
   async processAudioBlob(audioBlob) {
     log('DEBUG', 'Processing audio blob', {
       hasElement: !!this.elementDetector.currentElement,
-      isStreaming: this.isStreamingMode
+      isStreaming: this.isStreamingMode,
+      audioSize: audioBlob.size
     });
 
     if (!this.isStreamingMode || !this.elementDetector.currentElement) {
@@ -807,6 +930,13 @@ class VoiceController {
         isStreaming: this.isStreamingMode,
         hasElement: !!this.elementDetector.currentElement
       });
+      return;
+    }
+
+    // Check for silence by analyzing audio data
+    const isSilent = await this.detectSilence(audioBlob);
+    if (isSilent) {
+      log('DEBUG', 'Skipping audio processing - silence detected', { audioSize: audioBlob.size });
       return;
     }
 

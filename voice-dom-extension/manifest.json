@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "DOMbledore",
-  "version": "1.0.3",
+  "name": "Pagician",
+  "version": "1.0.5",
   "description": "Control web page elements with your voice using natural language commands",
   "permissions": [
     "activeTab",
