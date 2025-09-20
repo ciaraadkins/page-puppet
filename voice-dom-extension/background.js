@@ -11,9 +11,9 @@ function log(level, message, data = {}) {
   console.log(`[${timestamp}] [${level}] [BACKGROUND] ${message}`, data);
 
   // Store recent logs in memory for debugging
-  if (!global.logs) global.logs = [];
-  global.logs.push(logEntry);
-  if (global.logs.length > 100) global.logs.shift();
+  if (!globalThis.voiceControlLogs) globalThis.voiceControlLogs = [];
+  globalThis.voiceControlLogs.push(logEntry);
+  if (globalThis.voiceControlLogs.length > 100) globalThis.voiceControlLogs.shift();
 }
 
 log('INFO', 'Background service worker starting');
@@ -90,7 +90,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'getLogs') {
     log('INFO', 'Returning logs for debugging');
-    sendResponse({ logs: global.logs || [] });
+    sendResponse({ logs: globalThis.voiceControlLogs || [] });
     return true;
   }
 });

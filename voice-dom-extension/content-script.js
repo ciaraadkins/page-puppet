@@ -684,6 +684,9 @@ class VoiceController {
       return;
     }
 
+    // Initialize storage state to ensure popup has correct initial state
+    chrome.storage.local.set({ isVoiceControlActive: this.isStreamingMode });
+
     this.setupMessageListeners();
     log('INFO', 'VoiceController initialization complete');
   }
@@ -731,6 +734,9 @@ class VoiceController {
     this.elementDetector.activate();
     this.audioCapture.startStreamingMode(this.processAudioBlob.bind(this));
 
+    // Store streaming state for popup persistence
+    chrome.storage.local.set({ isVoiceControlActive: true });
+
     this.showStreamingIndicator();
     this.showNotification('Voice control activated', 'success');
     log('INFO', 'Streaming mode started successfully');
@@ -747,6 +753,9 @@ class VoiceController {
     this.isStreamingMode = false;
     this.elementDetector.deactivate();
     this.audioCapture.stopStreamingMode();
+
+    // Store streaming state for popup persistence
+    chrome.storage.local.set({ isVoiceControlActive: false });
 
     this.hideStreamingIndicator();
     this.showNotification('Voice control deactivated', 'info');

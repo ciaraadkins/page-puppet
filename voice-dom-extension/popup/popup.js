@@ -43,6 +43,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let isActive = false;
 
+  async function loadVoiceControlState() {
+    log('INFO', 'Loading voice control state from storage');
+    try {
+      const result = await chrome.storage.local.get(['isVoiceControlActive']);
+      isActive = result.isVoiceControlActive || false;
+      log('INFO', 'Voice control state loaded', { isActive });
+      return isActive;
+    } catch (error) {
+      log('ERROR', 'Failed to load voice control state', { error: error.message });
+      return false;
+    }
+  }
+
   async function checkApiKey() {
     log('INFO', 'Checking API key status');
     const result = await chrome.storage.sync.get(['openaiApiKey']);
@@ -152,8 +165,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       checkApiKey();
       updateUI();
     }
+    if (namespace === 'local' && changes.isVoiceControlActive) {
+      log('INFO', 'Voice control state changed, updating UI');
+      isActive = changes.isVoiceControlActive.newValue || false;
+      updateUI();
+    }
   });
 
+  // Load the current voice control state before updating UI
+  await loadVoiceControlState();
   updateUI();
   log('INFO', 'Popup initialization complete');
 });
