@@ -1,0 +1,30 @@
+# Extension specific
+*.crx
+*.pem
+
+# IDE and system files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and debug files
+*.log
+debug-logs/
+
+# Temporary files
+temp/
+tmp/
+
+# Node modules (if any)
+node_modules/
+npm-debug.log*
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+
+# Claude workspace
+.claude/

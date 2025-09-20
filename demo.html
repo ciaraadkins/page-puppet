@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice DOM Control Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            padding: 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #1a1a1a;
+            font-size: 36px;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ff8e53 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 18px;
+            margin-bottom: 40px;
+        }
+
+        .shapes-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .shape {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .shape:hover {
+            transform: scale(1.1);
+        }
+
+        .circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+        }
+
+        .square {
+            width: 120px;
+            height: 120px;
+            border-radius: 8px;
+        }
+
+        .rectangle {
+            width: 150px;
+            height: 100px;
+            border-radius: 8px;
+        }
+
+        .triangle {
+            width: 0;
+            height: 0;
+            border-left: 60px solid transparent;
+            border-right: 60px solid transparent;
+            border-bottom: 104px solid;
+        }
+
+        .red { background-color: #ff6b6b; }
+        .triangle.red { border-bottom-color: #ff6b6b; background: transparent; }
+
+        .blue { background-color: #4ecdc4; }
+        .triangle.blue { border-bottom-color: #4ecdc4; background: transparent; }
+
+        .yellow { background-color: #ffe66d; }
+        .triangle.yellow { border-bottom-color: #ffe66d; background: transparent; }
+
+        .green { background-color: #95e77e; }
+        .triangle.green { border-bottom-color: #95e77e; background: transparent; }
+
+        .purple { background-color: #a78bfa; }
+        .orange { background-color: #fb923c; }
+
+        .text-elements {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .text-box {
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .text-box:hover {
+            background: #e9ecef;
+        }
+
+        .text-box h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 20px;
+        }
+
+        .text-box p {
+            color: #666;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 40px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #374151;
+            border: 2px solid #e5e7eb;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .instructions {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            border: 2px solid #fbbf24;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 40px;
+        }
+
+        .instructions h2 {
+            color: #92400e;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+
+        .commands-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .command-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #f59e0b;
+        }
+
+        .command-item strong {
+            color: #92400e;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .command-item span {
+            color: #78350f;
+            font-size: 14px;
+        }
+
+        .image-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .image-box {
+            position: relative;
+            overflow: hidden;
+            border-radius: 8px;
+            height: 200px;
+            background: linear-gradient(135deg, #f0f0f0 0%, #e0e0e0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            color: #999;
+            transition: all 0.3s ease;
+        }
+
+        .image-box:hover {
+            transform: scale(1.05);
+        }
+
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #e5e7eb;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Voice DOM Control Demo Page</h1>
+        <p class="subtitle">Hover over any element and speak naturally to modify it!</p>
+
+        <section>
+            <h2>Colorful Shapes</h2>
+            <div class="shapes-container">
+                <div class="shape circle red" id="red-circle"></div>
+                <div class="shape square blue" id="blue-square"></div>
+                <div class="shape circle yellow" id="yellow-circle"></div>
+                <div class="shape square green" id="green-square"></div>
+                <div class="shape rectangle purple" id="purple-rectangle"></div>
+                <div class="shape triangle orange" id="orange-triangle"></div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Text Elements</h2>
+            <div class="text-elements">
+                <div class="text-box">
+                    <h3>Heading One</h3>
+                    <p>This is a sample paragraph that can be modified with voice commands. Try changing its color or size!</p>
+                </div>
+                <div class="text-box">
+                    <h3>Heading Two</h3>
+                    <p>Another text block ready for voice manipulation. Make it bigger, smaller, or change its appearance!</p>
+                </div>
+                <div class="text-box">
+                    <h3>Heading Three</h3>
+                    <p>Voice control makes DOM manipulation intuitive and fun. Just speak your intentions!</p>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Interactive Buttons</h2>
+            <div class="button-group">
+                <button class="btn btn-primary">Primary Button</button>
+                <button class="btn btn-secondary">Secondary Button</button>
+                <button class="btn btn-success">Success Button</button>
+                <button class="btn btn-warning">Warning Button</button>
+            </div>
+        </section>
+
+        <section>
+            <h2>Form Elements</h2>
+            <input type="text" placeholder="Type something or use voice to change this...">
+            <textarea rows="4" placeholder="This is a text area. You can modify its content with voice commands!"></textarea>
+        </section>
+
+        <section>
+            <h2>Image Placeholders</h2>
+            <div class="image-container">
+                <div class="image-box">📷</div>
+                <div class="image-box">🎨</div>
+                <div class="image-box">🌟</div>
+                <div class="image-box">🚀</div>
+            </div>
+        </section>
+
+        <div class="instructions">
+            <h2>🎤 Voice Command Examples</h2>
+            <div class="commands-grid">
+                <div class="command-item">
+                    <strong>"Make it red"</strong>
+                    <span>Changes element color to red</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Make it bigger"</strong>
+                    <span>Increases element size</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Hide it"</strong>
+                    <span>Hides the element</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Make it transparent"</strong>
+                    <span>Changes opacity</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Add a shadow"</strong>
+                    <span>Adds drop shadow effect</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Rotate it"</strong>
+                    <span>Rotates the element</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Change background to blue"</strong>
+                    <span>Changes background color</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Make text larger"</strong>
+                    <span>Increases font size</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Remove border"</strong>
+                    <span>Removes element border</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Make it glow"</strong>
+                    <span>Adds glow effect</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Change text to hello"</strong>
+                    <span>Changes text content</span>
+                </div>
+                <div class="command-item">
+                    <strong>"Make it small"</strong>
+                    <span>Decreases element size</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Voice DOM Controller Extension - Test Page</p>
+            <p>Make sure to enable the extension and configure your OpenAI API key in settings!</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,969 @@
+function log(level, message, data = {}) {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    level,
+    component: 'CONTENT',
+    message,
+    ...data
+  };
+
+  console.log(`[${timestamp}] [${level}] [CONTENT] ${message}`, data);
+
+  // Store recent logs in sessionStorage for debugging
+  try {
+    let logs = JSON.parse(sessionStorage.getItem('voiceControlLogs') || '[]');
+    logs.push(logEntry);
+    if (logs.length > 100) logs.shift();
+    sessionStorage.setItem('voiceControlLogs', JSON.stringify(logs));
+  } catch (e) {
+    // Ignore storage errors
+  }
+}
+
+log('INFO', 'Content script loading');
+
+class AudioCapture {
+  constructor() {
+    this.mediaRecorder = null;
+    this.audioChunks = [];
+    this.isRecording = false;
+    this.streamingMode = false;
+    this.streamingInterval = null;
+    this.processCallback = null;
+  }
+
+  async initializeRecording() {
+    log('INFO', 'Initializing audio recording');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
+
+      log('INFO', 'Microphone access granted');
+
+      this.mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+
+      log('INFO', 'MediaRecorder created', {
+        mimeType: this.mediaRecorder.mimeType,
+        state: this.mediaRecorder.state
+      });
+
+      this.setupEventHandlers();
+      log('INFO', 'Audio recording initialized successfully');
+      return true;
+    } catch (error) {
+      log('ERROR', 'Microphone access denied', { error: error.message });
+      return false;
+    }
+  }
+
+  setupEventHandlers() {
+    log('INFO', 'Setting up MediaRecorder event handlers');
+
+    this.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        log('DEBUG', 'Audio data available', { size: event.data.size });
+        this.audioChunks.push(event.data);
+      }
+    };
+
+    this.mediaRecorder.onstop = () => {
+      const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+      log('INFO', 'Recording stopped, processing audio', {
+        blobSize: audioBlob.size,
+        chunks: this.audioChunks.length
+      });
+
+      if (this.processCallback) {
+        this.processCallback(audioBlob);
+      }
+      this.audioChunks = [];
+    };
+
+    this.mediaRecorder.onstart = () => {
+      log('DEBUG', 'MediaRecorder started');
+    };
+
+    this.mediaRecorder.onerror = (event) => {
+      log('ERROR', 'MediaRecorder error', { error: event.error });
+    };
+  }
+
+  startStreamingMode(processCallback) {
+    log('INFO', 'Starting streaming mode');
+    this.streamingMode = true;
+    this.processCallback = processCallback;
+    this.startRecording();
+
+    this.streamingInterval = setInterval(() => {
+      if (this.isRecording && this.streamingMode) {
+        log('DEBUG', 'Cycling recording - stopping current');
+        this.mediaRecorder.stop();
+        setTimeout(() => {
+          if (this.streamingMode) {
+            log('DEBUG', 'Cycling recording - starting new');
+            this.startRecording();
+          }
+        }, 100);
+      }
+    }, 2000);
+
+    log('INFO', 'Streaming mode started with 2-second intervals');
+  }
+
+  stopStreamingMode() {
+    log('INFO', 'Stopping streaming mode');
+    this.streamingMode = false;
+    if (this.streamingInterval) {
+      clearInterval(this.streamingInterval);
+      this.streamingInterval = null;
+      log('DEBUG', 'Streaming interval cleared');
+    }
+    this.stopRecording();
+    log('INFO', 'Streaming mode stopped');
+  }
+
+  startRecording() {
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'recording') {
+      this.audioChunks = [];
+      this.mediaRecorder.start();
+      this.isRecording = true;
+      log('DEBUG', 'Recording started', { state: this.mediaRecorder.state });
+    } else {
+      log('WARN', 'Cannot start recording', {
+        hasRecorder: !!this.mediaRecorder,
+        state: this.mediaRecorder?.state
+      });
+    }
+  }
+
+  stopRecording() {
+    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+      this.mediaRecorder.stop();
+      this.isRecording = false;
+      log('DEBUG', 'Recording stopped manually');
+    } else {
+      log('DEBUG', 'Stop recording called but not recording', {
+        hasRecorder: !!this.mediaRecorder,
+        state: this.mediaRecorder?.state
+      });
+    }
+  }
+}
+
+class SpeechProcessor {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.baseUrl = 'https://api.openai.com/v1';
+    log('INFO', 'SpeechProcessor initialized', { hasApiKey: !!apiKey });
+  }
+
+  async transcribeAudio(audioBlob) {
+    log('INFO', 'Starting audio transcription', { audioSize: audioBlob.size });
+
+    if (!this.apiKey) {
+      log('ERROR', 'OpenAI API key not configured');
+      return null;
+    }
+
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'audio.webm');
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'text');
+    formData.append('prompt', 'Voice commands for web page manipulation: colors, sizes, visibility, positioning.');
+
+    log('DEBUG', 'Sending transcription request to OpenAI');
+
+    try {
+      const startTime = Date.now();
+      const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: formData
+      });
+
+      const duration = Date.now() - startTime;
+      log('DEBUG', 'Transcription response received', {
+        status: response.status,
+        duration: `${duration}ms`
+      });
+
+      if (!response.ok) {
+        log('ERROR', 'Transcription API request failed', {
+          status: response.status,
+          statusText: response.statusText
+        });
+        throw new Error(`API request failed: ${response.status}`);
+      }
+
+      const transcript = await response.text();
+      log('INFO', 'Transcription completed', {
+        transcript: transcript.substring(0, 100),
+        length: transcript.length,
+        duration: `${duration}ms`
+      });
+      return transcript.trim();
+    } catch (error) {
+      log('ERROR', 'Transcription failed', {
+        error: error.message,
+        stack: error.stack
+      });
+      return null;
+    }
+  }
+}
+
+const DOM_ACTION_SCHEMA = {
+  type: "object",
+  properties: {
+    action: {
+      type: "string",
+      enum: [
+        "changeColor", "changeBackgroundColor", "changeSize",
+        "changeWidth", "changeHeight", "changeOpacity",
+        "hide", "show", "changeBorder", "changePosition",
+        "addText", "changeText", "rotate", "addShadow"
+      ]
+    },
+    target: {
+      type: "string",
+      description: "Description of the target element"
+    },
+    value: {
+      type: "string",
+      description: "New value to apply (color name, size, text, etc.)"
+    },
+    confidence: {
+      type: "number",
+      description: "Confidence level 0-1 for this interpretation"
+    }
+  },
+  required: ["action", "target", "value", "confidence"],
+  additionalProperties: false
+};
+
+class CommandProcessor {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.baseUrl = 'https://api.openai.com/v1';
+    log('INFO', 'CommandProcessor initialized', { hasApiKey: !!apiKey });
+  }
+
+  async processCommand(transcript, elementContext) {
+    log('INFO', 'Processing voice command', {
+      transcript,
+      elementTag: elementContext?.tagName,
+      elementId: elementContext?.id
+    });
+
+    if (!this.apiKey || !transcript) {
+      log('WARN', 'Cannot process command', {
+        hasApiKey: !!this.apiKey,
+        hasTranscript: !!transcript
+      });
+      return null;
+    }
+
+    const prompt = `You are a voice command interpreter for web page manipulation.
+Current element context: ${JSON.stringify(elementContext)}
+User said: "${transcript}"
+
+Interpret this as a DOM manipulation command. Consider:
+- Element type, current styles, and position
+- Natural language variations (e.g., "make it red" = changeColor)
+- Context clues from the current element
+
+Return a structured command or null if not a valid command.`;
+
+    log('DEBUG', 'Sending command processing request to OpenAI');
+
+    try {
+      const startTime = Date.now();
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-2024-08-06',
+          messages: [
+            { role: 'system', content: prompt },
+            { role: 'user', content: transcript }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'dom_action',
+              schema: DOM_ACTION_SCHEMA,
+              strict: true
+            }
+          }
+        })
+      });
+
+      const duration = Date.now() - startTime;
+      log('DEBUG', 'Command processing response received', {
+        status: response.status,
+        duration: `${duration}ms`
+      });
+
+      if (!response.ok) {
+        log('ERROR', 'Command processing API request failed', {
+          status: response.status,
+          statusText: response.statusText
+        });
+        throw new Error(`API request failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      const command = JSON.parse(result.choices[0].message.content);
+
+      log('INFO', 'Command processed successfully', {
+        action: command.action,
+        value: command.value,
+        confidence: command.confidence,
+        duration: `${duration}ms`
+      });
+
+      return command;
+    } catch (error) {
+      log('ERROR', 'Command processing failed', {
+        error: error.message,
+        stack: error.stack
+      });
+      return null;
+    }
+  }
+}
+
+class ElementDetector {
+  constructor() {
+    this.currentElement = null;
+    this.highlightOverlay = null;
+    this.isActive = false;
+    this.setupEventListeners();
+    log('INFO', 'ElementDetector initialized');
+  }
+
+  setupEventListeners() {
+    document.addEventListener('mousemove', this.handleMouseMove.bind(this));
+    document.addEventListener('mouseout', this.handleMouseOut.bind(this));
+    log('INFO', 'ElementDetector event listeners setup');
+  }
+
+  handleMouseMove(event) {
+    if (!this.isActive) return;
+
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    if (element && element !== this.currentElement && element !== this.highlightOverlay) {
+      log('DEBUG', 'Element hover detected', {
+        tagName: element.tagName,
+        id: element.id,
+        className: element.className
+      });
+      this.updateHighlight(element);
+      this.currentElement = element;
+    }
+  }
+
+  handleMouseOut(event) {
+    if (!event.relatedTarget && this.isActive) {
+      this.removeHighlight();
+      this.currentElement = null;
+    }
+  }
+
+  updateHighlight(element) {
+    this.removeHighlight();
+
+    const rect = element.getBoundingClientRect();
+    this.highlightOverlay = document.createElement('div');
+    this.highlightOverlay.className = 'voice-control-highlight';
+    this.highlightOverlay.style.cssText = `
+      position: fixed;
+      top: ${rect.top}px;
+      left: ${rect.left}px;
+      width: ${rect.width}px;
+      height: ${rect.height}px;
+      border: 3px solid #ff6b6b;
+      background: rgba(255, 107, 107, 0.1);
+      pointer-events: none;
+      z-index: 999999;
+      border-radius: 4px;
+      box-shadow: 0 0 10px rgba(255, 107, 107, 0.5);
+    `;
+
+    document.body.appendChild(this.highlightOverlay);
+    log('DEBUG', 'Element highlighted', {
+      rect: { width: rect.width, height: rect.height }
+    });
+  }
+
+  removeHighlight() {
+    if (this.highlightOverlay) {
+      this.highlightOverlay.remove();
+      this.highlightOverlay = null;
+    }
+  }
+
+  getElementContext(element) {
+    if (!element) return null;
+
+    const computedStyle = window.getComputedStyle(element);
+
+    return {
+      tagName: element.tagName.toLowerCase(),
+      id: element.id || null,
+      className: element.className || null,
+      textContent: element.textContent?.substring(0, 100) || null,
+      styles: {
+        color: computedStyle.color,
+        backgroundColor: computedStyle.backgroundColor,
+        fontSize: computedStyle.fontSize,
+        width: computedStyle.width,
+        height: computedStyle.height,
+        position: computedStyle.position,
+        display: computedStyle.display,
+        opacity: computedStyle.opacity
+      },
+      rect: element.getBoundingClientRect()
+    };
+  }
+
+  activate() {
+    this.isActive = true;
+    log('INFO', 'ElementDetector activated');
+  }
+
+  deactivate() {
+    this.isActive = false;
+    this.removeHighlight();
+    this.currentElement = null;
+    log('INFO', 'ElementDetector deactivated');
+  }
+}
+
+class DOMManipulator {
+  constructor() {
+    this.actionMap = {
+      'changeColor': this.changeColor.bind(this),
+      'changeBackgroundColor': this.changeBackgroundColor.bind(this),
+      'changeSize': this.changeSize.bind(this),
+      'changeWidth': this.changeWidth.bind(this),
+      'changeHeight': this.changeHeight.bind(this),
+      'changeOpacity': this.changeOpacity.bind(this),
+      'hide': this.hide.bind(this),
+      'show': this.show.bind(this),
+      'changeBorder': this.changeBorder.bind(this),
+      'addShadow': this.addShadow.bind(this),
+      'rotate': this.rotate.bind(this),
+      'changeText': this.changeText.bind(this),
+      'addText': this.addText.bind(this)
+    };
+  }
+
+  executeCommand(command, element) {
+    if (!element || !command.action || command.confidence < 0.5) {
+      return false;
+    }
+
+    const action = this.actionMap[command.action];
+    if (action) {
+      try {
+        this.addUndoCapability(element, command);
+        action(element, command.value);
+        return true;
+      } catch (error) {
+        console.error('DOM manipulation failed:', error);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  changeColor(element, color) {
+    element.style.color = this.parseColor(color);
+  }
+
+  changeBackgroundColor(element, color) {
+    element.style.backgroundColor = this.parseColor(color);
+  }
+
+  changeSize(element, size) {
+    const multiplier = this.parseSize(size);
+    const currentFontSize = parseFloat(window.getComputedStyle(element).fontSize);
+    element.style.fontSize = `${currentFontSize * multiplier}px`;
+  }
+
+  changeWidth(element, width) {
+    if (width.includes('px') || width.includes('%')) {
+      element.style.width = width;
+    } else {
+      const multiplier = this.parseSize(width);
+      const currentWidth = parseFloat(window.getComputedStyle(element).width);
+      element.style.width = `${currentWidth * multiplier}px`;
+    }
+  }
+
+  changeHeight(element, height) {
+    if (height.includes('px') || height.includes('%')) {
+      element.style.height = height;
+    } else {
+      const multiplier = this.parseSize(height);
+      const currentHeight = parseFloat(window.getComputedStyle(element).height);
+      element.style.height = `${currentHeight * multiplier}px`;
+    }
+  }
+
+  changeOpacity(element, opacity) {
+    const value = this.parseOpacity(opacity);
+    element.style.opacity = value;
+  }
+
+  hide(element) {
+    element.dataset.originalDisplay = element.style.display || window.getComputedStyle(element).display;
+    element.style.display = 'none';
+  }
+
+  show(element) {
+    element.style.display = element.dataset.originalDisplay || 'block';
+  }
+
+  changeBorder(element, borderStyle) {
+    if (borderStyle.toLowerCase().includes('remove') || borderStyle.toLowerCase().includes('none')) {
+      element.style.border = 'none';
+    } else {
+      element.style.border = `2px solid ${this.parseColor(borderStyle)}`;
+    }
+  }
+
+  addShadow(element, shadowType) {
+    element.style.boxShadow = this.generateShadow(shadowType);
+  }
+
+  rotate(element, degrees) {
+    const rotation = degrees.match(/\d+/) ? `${degrees}deg` : degrees;
+    element.style.transform = `rotate(${rotation})`;
+  }
+
+  changeText(element, text) {
+    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+      element.value = text;
+    } else {
+      element.textContent = text;
+    }
+  }
+
+  addText(element, text) {
+    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+      element.value += text;
+    } else {
+      element.textContent += text;
+    }
+  }
+
+  parseColor(colorInput) {
+    const colorMap = {
+      'red': '#ff0000', 'blue': '#0000ff', 'green': '#00ff00',
+      'yellow': '#ffff00', 'purple': '#800080', 'orange': '#ffa500',
+      'pink': '#ffc0cb', 'black': '#000000', 'white': '#ffffff',
+      'gray': '#808080', 'grey': '#808080', 'brown': '#a52a2a',
+      'cyan': '#00ffff', 'magenta': '#ff00ff', 'lime': '#00ff00'
+    };
+
+    return colorMap[colorInput.toLowerCase()] || colorInput;
+  }
+
+  parseSize(sizeInput) {
+    const sizeMap = {
+      'bigger': 1.2, 'smaller': 0.8, 'huge': 2.0, 'tiny': 0.5,
+      'large': 1.5, 'small': 0.7, 'double': 2.0, 'half': 0.5,
+      'larger': 1.3, 'much bigger': 1.5, 'much smaller': 0.6
+    };
+
+    return sizeMap[sizeInput.toLowerCase()] || 1.0;
+  }
+
+  parseOpacity(opacityInput) {
+    const opacityMap = {
+      'transparent': '0', 'invisible': '0', 'semi-transparent': '0.5',
+      'translucent': '0.5', 'opaque': '1', 'solid': '1',
+      'faded': '0.3', 'very faded': '0.1', 'slightly faded': '0.7'
+    };
+
+    if (opacityMap[opacityInput.toLowerCase()]) {
+      return opacityMap[opacityInput.toLowerCase()];
+    }
+
+    const numValue = parseFloat(opacityInput);
+    if (!isNaN(numValue)) {
+      return Math.max(0, Math.min(1, numValue)).toString();
+    }
+
+    return '1';
+  }
+
+  generateShadow(shadowType) {
+    const shadowMap = {
+      'small': '0 2px 4px rgba(0,0,0,0.2)',
+      'medium': '0 4px 8px rgba(0,0,0,0.3)',
+      'large': '0 8px 16px rgba(0,0,0,0.4)',
+      'subtle': '0 1px 3px rgba(0,0,0,0.1)',
+      'strong': '0 10px 20px rgba(0,0,0,0.5)',
+      'glow': '0 0 20px rgba(255,255,255,0.8)',
+      'none': 'none'
+    };
+
+    return shadowMap[shadowType.toLowerCase()] || '0 4px 8px rgba(0,0,0,0.3)';
+  }
+
+  addUndoCapability(element, command) {
+    if (!element.dataset.voiceControlHistory) {
+      element.dataset.voiceControlHistory = JSON.stringify([]);
+    }
+
+    const history = JSON.parse(element.dataset.voiceControlHistory);
+    history.push({
+      command,
+      timestamp: Date.now(),
+      previousStyles: element.style.cssText
+    });
+
+    element.dataset.voiceControlHistory = JSON.stringify(history.slice(-10));
+  }
+}
+
+class VoiceController {
+  constructor() {
+    log('INFO', 'VoiceController constructor starting');
+    this.audioCapture = new AudioCapture();
+    this.speechProcessor = null;
+    this.commandProcessor = null;
+    this.elementDetector = new ElementDetector();
+    this.domManipulator = new DOMManipulator();
+
+    this.isStreamingMode = false;
+    this.apiKey = null;
+
+    log('INFO', 'VoiceController initialized, starting initialization');
+    this.initialize();
+  }
+
+  async initialize() {
+    log('INFO', 'VoiceController initialization starting');
+
+    const result = await chrome.storage.sync.get(['openaiApiKey']);
+    this.apiKey = result.openaiApiKey;
+
+    log('INFO', 'API key check complete', { hasApiKey: !!this.apiKey });
+
+    if (!this.apiKey) {
+      log('WARN', 'OpenAI API key not configured');
+      this.showNotification('Please configure your OpenAI API key in the extension options', 'warning');
+      return;
+    }
+
+    this.speechProcessor = new SpeechProcessor(this.apiKey);
+    this.commandProcessor = new CommandProcessor(this.apiKey);
+
+    const initialized = await this.audioCapture.initializeRecording();
+    if (!initialized) {
+      log('ERROR', 'Audio initialization failed');
+      this.showNotification('Microphone access denied. Voice control will not work.', 'error');
+      return;
+    }
+
+    this.setupMessageListeners();
+    log('INFO', 'VoiceController initialization complete');
+  }
+
+  setupMessageListeners() {
+    log('INFO', 'Setting up message listeners');
+    chrome.runtime.onMessage.addListener((message) => {
+      log('INFO', 'Message received from extension', {
+        action: message.action,
+        hasApiKey: !!message.apiKey
+      });
+
+      switch (message.action) {
+        case 'startStreaming':
+          this.startStreamingMode();
+          break;
+        case 'stopStreaming':
+          this.stopStreamingMode();
+          break;
+        case 'toggleStreaming':
+          this.toggleStreamingMode();
+          break;
+        case 'updateApiKey':
+          this.updateApiKey(message.apiKey);
+          break;
+      }
+    });
+  }
+
+  async startStreamingMode() {
+    log('INFO', 'Starting streaming mode');
+
+    if (this.isStreamingMode) {
+      log('WARN', 'Streaming mode already active');
+      return;
+    }
+
+    if (!this.apiKey) {
+      log('WARN', 'Cannot start streaming - no API key');
+      this.showNotification('Please configure your OpenAI API key first', 'warning');
+      return;
+    }
+
+    this.isStreamingMode = true;
+    this.elementDetector.activate();
+    this.audioCapture.startStreamingMode(this.processAudioBlob.bind(this));
+
+    this.showStreamingIndicator();
+    this.showNotification('Voice control activated', 'success');
+    log('INFO', 'Streaming mode started successfully');
+  }
+
+  stopStreamingMode() {
+    log('INFO', 'Stopping streaming mode');
+
+    if (!this.isStreamingMode) {
+      log('WARN', 'Streaming mode already inactive');
+      return;
+    }
+
+    this.isStreamingMode = false;
+    this.elementDetector.deactivate();
+    this.audioCapture.stopStreamingMode();
+
+    this.hideStreamingIndicator();
+    this.showNotification('Voice control deactivated', 'info');
+    log('INFO', 'Streaming mode stopped successfully');
+  }
+
+  toggleStreamingMode() {
+    log('INFO', 'Toggling streaming mode', { currentState: this.isStreamingMode });
+    if (this.isStreamingMode) {
+      this.stopStreamingMode();
+    } else {
+      this.startStreamingMode();
+    }
+  }
+
+  updateApiKey(apiKey) {
+    log('INFO', 'Updating API key', { hasApiKey: !!apiKey });
+    this.apiKey = apiKey;
+    this.speechProcessor = new SpeechProcessor(apiKey);
+    this.commandProcessor = new CommandProcessor(apiKey);
+    log('INFO', 'API key updated and processors reinitialized');
+  }
+
+  async processAudioBlob(audioBlob) {
+    log('DEBUG', 'Processing audio blob', {
+      hasElement: !!this.elementDetector.currentElement,
+      isStreaming: this.isStreamingMode
+    });
+
+    if (!this.isStreamingMode || !this.elementDetector.currentElement) {
+      log('DEBUG', 'Skipping audio processing', {
+        isStreaming: this.isStreamingMode,
+        hasElement: !!this.elementDetector.currentElement
+      });
+      return;
+    }
+
+    try {
+      const transcript = await this.speechProcessor.transcribeAudio(audioBlob);
+      if (!transcript || transcript.length < 3) {
+        log('DEBUG', 'Transcript too short or empty', { transcript });
+        return;
+      }
+
+      log('INFO', 'Audio processed - got transcript', { transcript });
+
+      const elementContext = this.elementDetector.getElementContext(
+        this.elementDetector.currentElement
+      );
+
+      const command = await this.commandProcessor.processCommand(
+        transcript, elementContext
+      );
+
+      if (command && command.confidence > 0.5) {
+        log('INFO', 'Executing command', {
+          action: command.action,
+          confidence: command.confidence
+        });
+
+        const success = this.domManipulator.executeCommand(
+          command, this.elementDetector.currentElement
+        );
+
+        if (success) {
+          this.showFeedback(`Applied: ${command.action} - ${command.value}`);
+          log('INFO', 'Command executed successfully');
+        } else {
+          log('WARN', 'Command execution failed');
+        }
+      } else {
+        log('DEBUG', 'Command rejected', {
+          hasCommand: !!command,
+          confidence: command?.confidence
+        });
+      }
+    } catch (error) {
+      log('ERROR', 'Audio processing failed', {
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+
+  showStreamingIndicator() {
+    const existing = document.getElementById('voice-streaming-indicator');
+    if (existing) return;
+
+    const indicator = document.createElement('div');
+    indicator.id = 'voice-streaming-indicator';
+    indicator.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: linear-gradient(135deg, #ff6b6b 0%, #ff8e53 100%);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 25px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 1000000;
+      box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: pulse 2s infinite;
+    `;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes pulse {
+        0% { box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3); }
+        50% { box-shadow: 0 4px 20px rgba(255, 107, 107, 0.5); }
+        100% { box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3); }
+      }
+
+      @keyframes recording {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+    `;
+    document.head.appendChild(style);
+
+    indicator.innerHTML = `
+      <div style="
+        width: 8px;
+        height: 8px;
+        background: white;
+        border-radius: 50%;
+        animation: recording 1s infinite;
+      "></div>
+      Voice Control Active
+    `;
+
+    document.body.appendChild(indicator);
+  }
+
+  hideStreamingIndicator() {
+    const indicator = document.getElementById('voice-streaming-indicator');
+    if (indicator) {
+      indicator.remove();
+    }
+  }
+
+  showFeedback(message) {
+    const feedback = document.createElement('div');
+    feedback.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 1000000;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      transition: all 0.3s ease;
+      transform: translateY(100px);
+    `;
+    feedback.textContent = message;
+    document.body.appendChild(feedback);
+
+    setTimeout(() => {
+      feedback.style.transform = 'translateY(0)';
+    }, 10);
+
+    setTimeout(() => {
+      feedback.style.opacity = '0';
+      feedback.style.transform = 'translateY(100px)';
+      setTimeout(() => feedback.remove(), 300);
+    }, 3000);
+  }
+
+  showNotification(message, type = 'info') {
+    const colors = {
+      'success': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      'error': 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+      'warning': 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+      'info': 'linear-gradient(135deg, #30cfd0 0%, #330867 100%)'
+    };
+
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: ${colors[type]};
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 1000001;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      transition: all 0.3s ease;
+      transform: translateX(400px);
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+      notification.style.transform = 'translateX(0)';
+    }, 10);
+
+    setTimeout(() => {
+      notification.style.opacity = '0';
+      notification.style.transform = 'translateX(400px)';
+      setTimeout(() => notification.remove(), 300);
+    }, 4000);
+  }
+}
+
+log('INFO', 'Initializing VoiceController');
+const voiceController = new VoiceController();
+log('INFO', 'Content script loaded completely');
