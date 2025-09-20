@@ -262,7 +262,19 @@ class SpeechProcessor {
       /^\s*(red|blue|green|yellow|black|white)\s*$/i, // Single color words
       /^\s*(bigger|smaller|hide|show)\s*$/i, // Single action words
       /^\s*color\s*$/i,
-      /^\s*size\s*$/i
+      /^\s*size\s*$/i,
+      // Common placeholder text patterns
+      /hello\s+world/i,
+      /sample\s+text/i,
+      /placeholder/i,
+      /test\s+text/i,
+      /lorem\s+ipsum/i,
+      /example\s+text/i,
+      /default\s+text/i,
+      /click\s+here/i,
+      /type\s+here/i,
+      /enter\s+text/i,
+      /^(hello|hi|test|sample|example|placeholder)$/i
     ];
 
     for (const pattern of hallucinationPatterns) {
@@ -366,6 +378,12 @@ Interpret this as a DOM manipulation command. Consider:
 - Element type, current styles, and position
 - Natural language variations (e.g., "make it red" = changeColor)
 - Context clues from the current element
+
+IMPORTANT for text commands:
+- NEVER use placeholder text like "Hello World", "Sample text", "Test text", etc.
+- ONLY use text that the user explicitly spoke
+- If the user's speech is unclear or incomplete, return null instead of guessing
+- Do not be helpful by suggesting default text - only use the user's actual words
 
 Return a structured command or null if not a valid command.`;
 
@@ -957,10 +975,16 @@ class VoiceController {
         transcript, elementContext
       );
 
-      if (command && command.confidence > 0.5) {
+      // Apply higher confidence threshold for text commands to prevent placeholder text
+      const isTextCommand = command && (command.action === 'addText' || command.action === 'changeText');
+      const confidenceThreshold = isTextCommand ? 0.8 : 0.5;
+
+      if (command && command.confidence > confidenceThreshold) {
         log('INFO', 'Executing command', {
           action: command.action,
-          confidence: command.confidence
+          confidence: command.confidence,
+          threshold: confidenceThreshold,
+          isTextCommand
         });
 
         const success = this.domManipulator.executeCommand(
@@ -1035,8 +1059,29 @@ class VoiceController {
         border-radius: 50%;
         animation: recording 1s infinite;
       "></div>
-      Voice Control Active
+      <span>Voice Control Active</span>
+      <button id="voice-control-stop-btn" style="
+        background: rgba(255, 255, 255, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 15px;
+        color: white;
+        padding: 4px 8px;
+        font-size: 12px;
+        cursor: pointer;
+        margin-left: 8px;
+        transition: all 0.2s ease;
+      " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'"
+         onmouseout="this.style.background='rgba(255, 255, 255, 0.2)'">
+        Stop
+      </button>
     `;
+
+    // Add click handler for stop button
+    const stopBtn = indicator.querySelector('#voice-control-stop-btn');
+    stopBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.stopStreamingMode();
+    });
 
     document.body.appendChild(indicator);
   }
