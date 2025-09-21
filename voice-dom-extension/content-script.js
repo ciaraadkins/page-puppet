@@ -382,14 +382,31 @@ User said: "${transcript}"
 
 Interpret this as a DOM manipulation command. Consider:
 - Element type, current styles, and position
-- Natural language variations (e.g., "make it green" = changeColor)
+- Natural language variations and examples:
+  • "make it green" = changeColor: green
+  • "highlight this" = changeBackgroundColor: yellow
+  • "make it bigger" = changeSize: bigger
+  • "hide it" = hide
 - Context clues from the current element
+
+CRITICAL RULES for highlighting commands:
+- "highlight", "highlight this", "highlight this text" = changeBackgroundColor ONLY
+- NEVER change text content when user says "highlight"
+- "this text" in highlighting context refers to the existing element content, not replacement text
+- Highlighting means background color change, not text modification
 
 IMPORTANT for text commands:
 - NEVER use placeholder text like "Hello World", "Sample text", "Test text", etc.
 - ONLY use text that the user explicitly spoke
 - If the user's speech is unclear or incomplete, return null instead of guessing
 - Do not be helpful by suggesting default text - only use the user's actual words
+- Text commands require explicit new text content (e.g., "change text to hello")
+
+Common highlighting examples:
+- "highlight this" → changeBackgroundColor: yellow
+- "highlight this text" → changeBackgroundColor: yellow
+- "highlight it" → changeBackgroundColor: yellow
+- "make it highlighted" → changeBackgroundColor: yellow
 
 Return a structured command or null if not a valid command.`;
 
@@ -789,8 +806,9 @@ class VoiceController {
 
     this.isStreamingMode = false;
     this.apiKey = null;
+    this.audioInitialized = false;
 
-    log('INFO', 'VoiceController initialized, starting initialization');
+    log('INFO', 'VoiceController initialized, starting initialization (no audio permissions)');
     this.initialize();
   }
 
@@ -811,18 +829,72 @@ class VoiceController {
     this.speechProcessor = new SpeechProcessor(this.apiKey);
     this.commandProcessor = new CommandProcessor(this.apiKey);
 
-    const initialized = await this.audioCapture.initializeRecording();
-    if (!initialized) {
-      log('ERROR', 'Audio initialization failed');
-      this.showNotification('Microphone access denied. Voice control will not work.', 'error');
-      return;
-    }
-
     // Initialize storage state to ensure popup has correct initial state
     chrome.storage.local.set({ isVoiceControlActive: this.isStreamingMode });
 
     this.setupMessageListeners();
-    log('INFO', 'VoiceController initialization complete');
+    log('INFO', 'VoiceController initialization complete (audio permissions deferred)');
+  }
+
+  async requestAudioPermissions() {
+    log('INFO', 'Requesting audio permissions');
+
+    if (this.audioInitialized) {
+      log('INFO', 'Audio already initialized');
+      return true;
+    }
+
+    // Check if we already have permission for this domain
+    const currentDomain = window.location.hostname;
+    const storageKey = `audioPermission_${currentDomain}`;
+
+    try {
+      const result = await chrome.storage.local.get([storageKey]);
+      if (result[storageKey] === 'granted') {
+        log('INFO', 'Audio permission already granted for this domain', { domain: currentDomain });
+      }
+
+      // Always try to initialize, as stored permission might be outdated
+      const initialized = await this.audioCapture.initializeRecording();
+
+      if (initialized) {
+        this.audioInitialized = true;
+        // Store permission for this domain
+        await chrome.storage.local.set({ [storageKey]: 'granted' });
+        log('INFO', 'Audio permissions granted and stored', { domain: currentDomain });
+        return true;
+      } else {
+        // Store permission denial for this domain
+        await chrome.storage.local.set({ [storageKey]: 'denied' });
+        log('WARN', 'Audio permissions denied and stored', { domain: currentDomain });
+        this.showNotification('Microphone access is required for voice control. Please enable it in your browser settings.', 'error');
+        return false;
+      }
+    } catch (error) {
+      log('ERROR', 'Failed to request audio permissions', { error: error.message });
+      return false;
+    }
+  }
+
+  async getPermissionStatus() {
+    const currentDomain = window.location.hostname;
+    const storageKey = `audioPermission_${currentDomain}`;
+
+    try {
+      const result = await chrome.storage.local.get([storageKey]);
+      return {
+        domain: currentDomain,
+        status: result[storageKey] || 'not-requested',
+        audioInitialized: this.audioInitialized
+      };
+    } catch (error) {
+      log('ERROR', 'Failed to get permission status', { error: error.message });
+      return {
+        domain: currentDomain,
+        status: 'error',
+        audioInitialized: false
+      };
+    }
   }
 
   setupMessageListeners() {
@@ -855,6 +927,14 @@ class VoiceController {
             this.updateApiKey(message.apiKey);
             sendResponse({ success: true, message: 'API key updated' });
             break;
+          case 'getPermissionStatus':
+            this.getPermissionStatus().then((status) => {
+              sendResponse({ success: true, status });
+            }).catch((error) => {
+              log('ERROR', 'Failed to get permission status', { error: error.message });
+              sendResponse({ success: false, error: error.message });
+            });
+            break;
           default:
             sendResponse({ success: false, error: 'Unknown action' });
         }
@@ -878,6 +958,13 @@ class VoiceController {
     if (!this.apiKey) {
       log('WARN', 'Cannot start streaming - no API key');
       this.showNotification('Please configure your OpenAI API key first', 'warning');
+      return;
+    }
+
+    // Request audio permissions when user actually wants to use voice control
+    const permissionGranted = await this.requestAudioPermissions();
+    if (!permissionGranted) {
+      log('ERROR', 'Cannot start streaming - audio permissions denied');
       return;
     }
 
