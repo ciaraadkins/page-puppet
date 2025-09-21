@@ -30,5 +30,6 @@ ehthumbs.db
 .claude/
 
 # Documentation and demo files (keep local only)
-*.md
+instructions.md
+instructions-v2.md
 *.html
