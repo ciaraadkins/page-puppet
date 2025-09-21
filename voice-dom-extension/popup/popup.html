@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Voice DOM Controller</title>
+  <title>Pagician</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -30,6 +30,23 @@
       <div class="api-status" id="apiStatus">
         <div class="api-indicator"></div>
         <span class="api-text">API Key Status</span>
+      </div>
+
+      <div class="usage-status" id="usageStatus" style="display: none;">
+        <div class="usage-progress">
+          <div class="usage-bar" id="usageBar"></div>
+        </div>
+        <span class="usage-text" id="usageText">Trial: 0/100 requests used</span>
+      </div>
+
+      <div class="permission-status" id="permissionStatus">
+        <div class="permission-indicator"></div>
+        <span class="permission-text">Microphone: Not requested</span>
+      </div>
+
+      <div class="limit-warning" id="limitWarning" style="display: none;">
+        <p>⚠️ Trial limit reached!</p>
+        <button class="btn-upgrade" id="upgradeBtn">Add Your API Key</button>
       </div>
 
       <div class="instructions">

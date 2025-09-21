@@ -34,6 +34,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveButton = document.getElementById('save');
   const testButton = document.getElementById('test');
   const statusDiv = document.getElementById('status');
+  const trialInfo = document.getElementById('trialInfo');
+  const trialInfoTitle = document.getElementById('trialInfoTitle');
+  const trialInfoText = document.getElementById('trialInfoText');
+  const usageProgress = document.getElementById('usageProgress');
+  const usageBar = document.getElementById('usageBar');
+  const usageText = document.getElementById('usageText');
 
   log('INFO', 'UI elements found', {
     hasApiKeyInput: !!apiKeyInput,
@@ -70,22 +76,73 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  async function loadUsageStats() {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'getUsageStats' });
+
+      if (response && response.success) {
+        const stats = response.stats;
+        log('INFO', 'Usage stats loaded', { stats });
+
+        if (stats.mode === 'user') {
+          // Using user's API key
+          trialInfoTitle.textContent = 'Using Your API Key';
+          trialInfoText.textContent = 'You have unlimited requests with your own API key.';
+          usageProgress.style.display = 'none';
+          trialInfo.style.background = 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)';
+          trialInfo.style.border = '1px solid #10b981';
+        } else {
+          // Using trial
+          if (stats.limitReached) {
+            trialInfoTitle.textContent = 'Trial Expired';
+            trialInfoText.textContent = 'Your free trial has ended. Please add your OpenAI API key to continue using the extension.';
+            trialInfo.style.background = 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)';
+            trialInfo.style.border = '1px solid #ef4444';
+          } else {
+            trialInfoTitle.textContent = 'Free Trial Active';
+            trialInfoText.textContent = `You're using the free trial. ${stats.remaining} requests remaining out of ${stats.limit} total.`;
+
+            if (stats.remaining <= 10) {
+              trialInfoText.style.color = '#dc2626';
+              trialInfoText.textContent += ' Add your API key soon!';
+            }
+          }
+
+          // Show usage progress
+          usageProgress.style.display = 'block';
+          const percentage = Math.min(100, stats.percentage);
+          usageBar.style.width = `${percentage}%`;
+          usageText.textContent = `${stats.used}/${stats.limit} requests used`;
+        }
+      }
+    } catch (error) {
+      log('ERROR', 'Failed to load usage stats', { error: error.message });
+    }
+  }
+
+  // Load usage stats on page load
+  loadUsageStats();
+
   async function loadSettings() {
     log('INFO', 'Loading settings from storage');
     const result = await chrome.storage.sync.get([
+      'userApiKey',
       'openaiApiKey',
       'confidenceThreshold',
       'recordingDuration'
     ]);
 
     log('INFO', 'Settings loaded', {
-      hasApiKey: !!result.openaiApiKey,
+      hasUserApiKey: !!result.userApiKey,
+      hasLegacyApiKey: !!result.openaiApiKey,
       confidenceThreshold: result.confidenceThreshold,
       recordingDuration: result.recordingDuration
     });
 
-    if (result.openaiApiKey) {
-      apiKeyInput.value = result.openaiApiKey;
+    // Check for user API key first, then legacy key
+    const apiKey = result.userApiKey || result.openaiApiKey;
+    if (apiKey) {
+      apiKeyInput.value = apiKey;
       log('DEBUG', 'API key loaded into input');
     }
 
@@ -128,40 +185,53 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      await chrome.storage.sync.set({
-        openaiApiKey: apiKey,
-        confidenceThreshold: confidence,
-        recordingDuration: duration
+      // Use the new API key manager via background script
+      const response = await chrome.runtime.sendMessage({
+        action: 'setUserApiKey',
+        apiKey: apiKey
       });
 
-      log('INFO', 'Settings saved to storage successfully');
-      showStatus('Settings saved successfully!', 'success');
-
-      chrome.tabs.query({}, (tabs) => {
-        log('INFO', 'Notifying content scripts of API key update', { tabCount: tabs.length });
-        let notifiedCount = 0;
-        let failedCount = 0;
-
-        tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, {
-            action: 'updateApiKey',
-            apiKey: apiKey
-          }).then(() => {
-            notifiedCount++;
-          }).catch(() => {
-            failedCount++;
-            // Only log if we're in debug mode - reduce spam
-            if (failedCount <= 3) {
-              log('DEBUG', 'Failed to notify some tabs (expected for non-extension tabs)');
-            }
-          });
+      if (response && response.success) {
+        // Also save other settings
+        await chrome.storage.sync.set({
+          confidenceThreshold: confidence,
+          recordingDuration: duration
         });
 
-        // Summary log after attempts complete
-        setTimeout(() => {
-          log('INFO', 'Tab notification complete', { notifiedCount, failedCount });
-        }, 1000);
-      });
+        log('INFO', 'Settings saved to storage successfully');
+        showStatus('Settings saved successfully!', 'success');
+        loadUsageStats(); // Reload stats to reflect mode change
+
+        // Notify all tabs of the update
+        chrome.tabs.query({}, (tabs) => {
+          log('INFO', 'Notifying content scripts of API key update', { tabCount: tabs.length });
+          let notifiedCount = 0;
+          let failedCount = 0;
+
+          tabs.forEach(tab => {
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'updateApiKey',
+              apiKey: apiKey
+            }).then(() => {
+              notifiedCount++;
+            }).catch(() => {
+              failedCount++;
+              // Only log if we're in debug mode - reduce spam
+              if (failedCount <= 3) {
+                log('DEBUG', 'Failed to notify some tabs (expected for non-extension tabs)');
+              }
+            });
+          });
+
+          // Summary log after attempts complete
+          setTimeout(() => {
+            log('INFO', 'Tab notification complete', { notifiedCount, failedCount });
+          }, 1000);
+        });
+      } else {
+        log('ERROR', 'Failed to save API key', { response });
+        showStatus(response?.error || 'Failed to save API key', 'error');
+      }
     } catch (error) {
       log('ERROR', 'Failed to save settings', {
         error: error.message,
