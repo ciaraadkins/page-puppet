@@ -28,3 +28,7 @@ ehthumbs.db
 
 # Claude workspace
 .claude/
+
+# Documentation and demo files (keep local only)
+*.md
+*.html
