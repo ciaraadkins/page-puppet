@@ -8,7 +8,13 @@ function log(level, message, data = {}) {
     ...data
   };
 
-  console.log(`[${timestamp}] [${level}] [CONTENT] ${message}`, data);
+  // Only log important events
+  if (level === 'ERROR' || level === 'WARN' ||
+      message.includes('Command executed') || message.includes('Executing command') ||
+      message.includes('Audio processed - got transcript') || message.includes('element context') ||
+      message.includes('parseColor')) {
+    console.log(`[${timestamp}] [${level}] [CONTENT] ${message}`, data);
+  }
 
   // Store recent logs in sessionStorage for debugging
   try {
@@ -184,7 +190,7 @@ class SpeechProcessor {
     formData.append('file', audioBlob, 'audio.webm');
     formData.append('model', 'gpt-4o-mini-transcribe');
     formData.append('response_format', 'text');
-    formData.append('prompt', 'Voice commands for DOM manipulation. Commands like: make it red, bigger, hide it, rotate, add shadow. Ignore background noise, URLs, or unrelated speech.');
+    formData.append('prompt', 'Voice commands for DOM manipulation. Commands like: make it blue, bigger, hide it, rotate, add shadow. Ignore background noise, URLs, or unrelated speech.');
 
     log('DEBUG', 'Sending transcription request to OpenAI');
 
@@ -376,7 +382,7 @@ User said: "${transcript}"
 
 Interpret this as a DOM manipulation command. Consider:
 - Element type, current styles, and position
-- Natural language variations (e.g., "make it red" = changeColor)
+- Natural language variations (e.g., "make it green" = changeColor)
 - Context clues from the current element
 
 IMPORTANT for text commands:
@@ -576,20 +582,42 @@ class DOMManipulator {
   }
 
   executeCommand(command, element) {
+    log('INFO', 'executeCommand called', {
+      hasElement: !!element,
+      elementTag: element?.tagName,
+      elementId: element?.id,
+      action: command?.action,
+      value: command?.value,
+      confidence: command?.confidence
+    });
+
     if (!element || !command.action || command.confidence < 0.5) {
+      log('WARN', 'executeCommand rejected', {
+        hasElement: !!element,
+        hasAction: !!command?.action,
+        confidence: command?.confidence
+      });
       return false;
     }
 
     const action = this.actionMap[command.action];
     if (action) {
       try {
+        log('INFO', 'Calling action method', { action: command.action, value: command.value });
         this.addUndoCapability(element, command);
         action(element, command.value);
+        log('INFO', 'Action method completed successfully');
         return true;
       } catch (error) {
-        console.error('DOM manipulation failed:', error);
+        log('ERROR', 'DOM manipulation failed', {
+          action: command.action,
+          value: command.value,
+          error: error.message
+        });
         return false;
       }
+    } else {
+      log('WARN', 'Action not found in actionMap', { action: command.action });
     }
     return false;
   }
@@ -677,14 +705,18 @@ class DOMManipulator {
 
   parseColor(colorInput) {
     const colorMap = {
-      'red': '#ff0000', 'blue': '#0000ff', 'green': '#00ff00',
-      'yellow': '#ffff00', 'purple': '#800080', 'orange': '#ffa500',
-      'pink': '#ffc0cb', 'black': '#000000', 'white': '#ffffff',
-      'gray': '#808080', 'grey': '#808080', 'brown': '#a52a2a',
-      'cyan': '#00ffff', 'magenta': '#ff00ff', 'lime': '#00ff00'
+      'blue': '#0000ff', 'green': '#00ff00', 'purple': '#800080',
+      'orange': '#ffa500', 'yellow': '#ffff00', 'pink': '#ffc0cb',
+      'cyan': '#00ffff', 'magenta': '#ff00ff', 'lime': '#00ff00',
+      'black': '#000000', 'white': '#ffffff', 'gray': '#808080',
+      'grey': '#808080', 'brown': '#a52a2a', 'red': '#ff0000',
+      'forest green': '#228b22', 'dark green': '#006400', 'light blue': '#add8e6',
+      'dark blue': '#00008b', 'light green': '#90ee90', 'navy': '#000080'
     };
 
-    return colorMap[colorInput.toLowerCase()] || colorInput;
+    const result = colorMap[colorInput.toLowerCase()] || colorInput;
+    log('DEBUG', 'parseColor result', { input: colorInput, output: result, mapped: !!colorMap[colorInput.toLowerCase()] });
+    return result;
   }
 
   parseSize(sizeInput) {
@@ -975,16 +1007,18 @@ class VoiceController {
         transcript, elementContext
       );
 
-      // Apply higher confidence threshold for text commands to prevent placeholder text
+      // Apply higher confidence threshold for text and color commands to prevent defaults
       const isTextCommand = command && (command.action === 'addText' || command.action === 'changeText');
-      const confidenceThreshold = isTextCommand ? 0.8 : 0.5;
+      const isColorCommand = command && (command.action === 'changeColor' || command.action === 'changeBackgroundColor');
+      const confidenceThreshold = (isTextCommand || isColorCommand) ? 0.8 : 0.5;
 
       if (command && command.confidence > confidenceThreshold) {
         log('INFO', 'Executing command', {
           action: command.action,
           confidence: command.confidence,
           threshold: confidenceThreshold,
-          isTextCommand
+          isTextCommand,
+          isColorCommand
         });
 
         const success = this.domManipulator.executeCommand(
