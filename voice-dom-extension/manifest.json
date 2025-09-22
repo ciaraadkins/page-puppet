@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Pagician",
   "version": "1.0.7",
-  "description": "Control web page elements with your voice using natural language commands",
+  "description": "Transform web pages with your voice! Point, speak, and watch elements change instantly. Change colors, sizes, text, and more using natural language commands like 'make it blue' or 'make it bigger'. Includes 100 free trial requests.",
   "permissions": [
     "activeTab",
     "storage",
@@ -31,5 +31,13 @@
     "16": "assets/icons/icon16.png",
     "48": "assets/icons/icon48.png",
     "128": "assets/icons/icon128.png"
-  }
+  },
+  "homepage_url": "https://github.com/ciaraadkins/page-puppet",
+  "author": "Ciara Adkins",
+  "short_name": "Pagician",
+  "web_accessible_resources": [{
+    "resources": ["assets/icons/*.png"],
+    "matches": ["<all_urls>"]
+  }],
+  "privacy_policy": "https://raw.githubusercontent.com/ciaraadkins/page-puppet/main/PRIVACY_POLICY.md"
 }

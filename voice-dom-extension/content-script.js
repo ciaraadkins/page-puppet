@@ -344,8 +344,8 @@ const DOM_ACTION_SCHEMA = {
       enum: [
         "changeColor", "changeBackgroundColor", "changeSize",
         "changeWidth", "changeHeight", "changeOpacity",
-        "hide", "show", "changeBorder", "changePosition",
-        "addText", "changeText", "rotate", "addShadow"
+        "rotate", "addShadow", "changeBorder", "changePosition",
+        "hide", "show", "changeText", "addText"
       ]
     },
     target: {
@@ -396,14 +396,27 @@ class CommandProcessor {
 Current element context: ${JSON.stringify(elementContext)}
 User said: "${transcript}"
 
-Interpret this as a DOM manipulation command. Consider:
-- Element type, current styles, and position
-- Natural language variations and examples:
-  • "make it green" = changeColor: green
-  • "highlight this" = changeBackgroundColor: yellow
-  • "make it bigger" = changeSize: bigger
-  • "hide it" = hide
-- Context clues from the current element
+ELEMENT TYPE PRIORITY RULES (CRITICAL):
+- For visual elements (div.shape, canvas, svg, img, colored divs): STRONGLY prefer visual actions (changeColor, changeBackgroundColor, changeSize, rotate, addShadow)
+- For elements with minimal/no text content (<10 chars): PREFER visual actions over text actions
+- For elements with className containing "shape", "visual", "graphic", "color": ALWAYS prefer visual actions
+- For text elements (p, h1-h6, span with substantial text): Consider both visual and text actions
+- For form elements (input, textarea, button): Consider text changes only if user explicitly mentions text content
+- When element serves primarily visual purpose: NEVER use changeText or addText unless explicitly requested
+
+COMMAND DISAMBIGUATION (CRITICAL):
+- "make it [color]" = visual change (changeColor/changeBackgroundColor)
+- "change this to [color]" = visual change (changeColor/changeBackgroundColor)
+- "turn it [color]" = visual change (changeColor/changeBackgroundColor)
+- "change this color" = visual change (changeColor/changeBackgroundColor)
+- "make this [color]" = visual change (changeColor/changeBackgroundColor)
+- ONLY "change text to X" or "add text X" should trigger text actions
+
+VISUAL ELEMENT EXAMPLES:
+- "make it yellow" on colored div/shape = changeBackgroundColor: yellow (NOT changeText)
+- "change this to red" on visual element = changeBackgroundColor: red
+- "make this blue" on shape/visual element = changeBackgroundColor: blue
+- "turn it green" on colored element = changeBackgroundColor: green
 
 CRITICAL RULES for highlighting commands:
 - "highlight", "highlight this", "highlight this text" = changeBackgroundColor ONLY
@@ -418,11 +431,11 @@ IMPORTANT for text commands:
 - Do not be helpful by suggesting default text - only use the user's actual words
 - Text commands require explicit new text content (e.g., "change text to hello")
 
-Common highlighting examples:
+Common examples:
+- "make it bigger" = changeSize: bigger
+- "hide it" = hide
 - "highlight this" → changeBackgroundColor: yellow
-- "highlight this text" → changeBackgroundColor: yellow
-- "highlight it" → changeBackgroundColor: yellow
-- "make it highlighted" → changeBackgroundColor: yellow
+- "rotate it" = rotate: 45deg
 
 Return a structured command or null if not a valid command.`;
 
