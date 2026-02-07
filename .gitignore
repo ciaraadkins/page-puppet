@@ -1,6 +1,7 @@
 # Extension specific
 *.crx
 *.pem
+*.zip
 
 # IDE and system files
 .DS_Store
@@ -30,7 +31,6 @@ ehthumbs.db
 .claude/
 
 # Documentation and demo files (keep local only)
-instructions.md
-instructions-v2.md
-*.html
-!demo.html
+docs/instructions.md
+docs/instructions-v2.md
+website/landing-page.html
