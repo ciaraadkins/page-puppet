@@ -216,9 +216,15 @@
       display: block;
     }
 
+    .status.info {
+      background: #dbeafe;
+      color: #1e40af;
+      display: block;
+    }
+
     .info-box {
-      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-      border: 1px solid #fbbf24;
+      background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+      border: 1px solid #3b82f6;
       border-radius: 8px;
       padding: 16px;
       margin-bottom: 24px;
@@ -226,7 +232,7 @@
 
     .info-box h3 {
       font-size: 14px;
-      color: #92400e;
+      color: #1e40af;
       margin-bottom: 8px;
       display: flex;
       align-items: center;
@@ -235,7 +241,7 @@
 
     .info-box p {
       font-size: 13px;
-      color: #78350f;
+      color: #1e3a5f;
       line-height: 1.5;
     }
 
@@ -244,40 +250,61 @@
       background: #e5e7eb;
       margin: 32px 0;
     }
+
+    .key-status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .key-status.configured {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .key-status.missing {
+      background: #fee2e2;
+      color: #991b1b;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <h1>Pagician</h1>
-      <p>Configure your settings</p>
+      <p>Configure your API keys</p>
     </div>
 
     <div class="content">
-      <div class="info-box" id="trialInfo">
+      <div class="info-box">
         <h3>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"></circle>
             <line x1="12" y1="8" x2="12" y2="12"></line>
             <line x1="12" y1="16" x2="12.01" y2="16"></line>
           </svg>
-          <span id="trialInfoTitle">Free Trial Active</span>
+          API Keys Required
         </h3>
-        <p id="trialInfoText">You're using the free trial. You get 100 total requests to test the extension.</p>
-        <div id="usageProgress" style="margin-top: 12px; display: none;">
-          <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden;">
-            <div id="usageBar" style="height: 100%; background: linear-gradient(90deg, #10b981 0%, #fbbf24 70%, #ef4444 90%); width: 0%; transition: width 0.3s;"></div>
-          </div>
-          <p id="usageText" style="margin-top: 8px; font-size: 12px; color: #78350f;">0/100 requests used</p>
+        <p>Pagician requires both an OpenAI API key (for speech-to-text) and an Anthropic API key (for command interpretation). Your keys are stored locally and never shared.</p>
+      </div>
+
+      <div class="form-group">
+        <label for="openaiKey">OpenAI API Key <span class="key-status missing" id="openaiStatus">Not configured</span></label>
+        <input type="password" id="openaiKey" placeholder="sk-proj-..." autocomplete="off">
+        <div class="help-text">
+          Used for voice transcription (Whisper). Get your key from <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a>.
         </div>
       </div>
 
       <div class="form-group">
-        <label for="apiKey">OpenAI API Key</label>
-        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+        <label for="anthropicKey">Anthropic API Key <span class="key-status missing" id="anthropicStatus">Not configured</span></label>
+        <input type="password" id="anthropicKey" placeholder="sk-ant-..." autocomplete="off">
         <div class="help-text">
-          Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a>.
-          Your key is stored locally and never shared.
+          Used for command interpretation (Claude). Get your key from <a href="https://console.anthropic.com/settings/keys" target="_blank">Anthropic Console</a>.
         </div>
       </div>
 
@@ -294,20 +321,10 @@
         </div>
       </div>
 
-      <div class="form-group">
-        <label for="recordingDuration">Recording Duration (seconds)</label>
-        <div class="slider-container">
-          <input type="range" id="recordingDuration" class="slider" min="1" max="5" step="0.5" value="2">
-          <span class="slider-value" id="durationValue">2.0s</span>
-        </div>
-        <div class="help-text">
-          How long to record audio before processing. Shorter durations are more responsive, longer durations capture more complex commands.
-        </div>
-      </div>
-
       <div class="button-group">
         <button id="save" class="btn btn-primary">Save Settings</button>
-        <button id="test" class="btn btn-secondary">Test API Key</button>
+        <button id="testOpenai" class="btn btn-secondary">Test OpenAI</button>
+        <button id="testAnthropic" class="btn btn-secondary">Test Anthropic</button>
       </div>
 
       <div id="status" class="status"></div>

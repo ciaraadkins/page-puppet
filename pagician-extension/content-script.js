@@ -10,8 +10,6 @@ class VoiceController {
     this.isStreamingMode = false;
     this.apiKey = null;
     this.audioInitialized = false;
-    this.apiKeyMode = null;
-    this.usageStats = null;
 
     // Transcript accumulator for partial/rejected transcripts
     this.transcriptAccumulator = '';
@@ -27,27 +25,16 @@ class VoiceController {
   async initialize() {
     log('INFO', 'VoiceController initialization starting');
 
-    // Get API key and usage stats from background script
+    // Get API keys from background script
     try {
-      const response = await chrome.runtime.sendMessage({ action: 'getApiKeyAndStats' });
+      const response = await chrome.runtime.sendMessage({ action: 'getApiKeys' });
 
-      if (response.success) {
-        this.apiKey = response.apiKey;
-        this.apiKeyMode = response.mode;
-        this.usageStats = response.stats;
-
-        log('INFO', 'API key and stats retrieved', {
-          hasApiKey: !!this.apiKey,
-          mode: this.apiKeyMode,
-          usage: this.usageStats
-        });
+      if (response.success && response.openaiKey) {
+        this.apiKey = response.openaiKey;
+        log('INFO', 'OpenAI API key retrieved', { hasApiKey: true });
       } else {
-        log('ERROR', 'Failed to get API key:', response.error);
-        if (response.limitReached) {
-          this.showNotification('Trial limit reached. Please add your own API key in settings.', 'error');
-        } else {
-          this.showNotification('Please configure your OpenAI API key in the extension options', 'warning');
-        }
+        log('WARN', 'API keys not configured');
+        this.showNotification('Please configure your API keys in the extension settings', 'warning');
         return;
       }
     } catch (error) {
@@ -55,34 +42,9 @@ class VoiceController {
       return;
     }
 
-    if (!this.apiKey) {
-      log('WARN', 'No API key available');
-      if (this.usageStats && this.usageStats.limitReached) {
-        this.showNotification('Trial limit reached (100/100). Add your API key to continue.', 'error');
-      } else {
-        this.showNotification('Please configure your OpenAI API key in the extension options', 'warning');
-      }
-      return;
-    }
-
     this.speechProcessor = new SpeechProcessor(this.apiKey);
     this.commandProcessor = new CommandProcessor();
 
-    // Set up usage tracking callbacks
-    const trackUsage = async () => {
-      if (this.apiKeyMode === 'default') {
-        const response = await chrome.runtime.sendMessage({ action: 'incrementUsage' });
-        if (response.limitReached) {
-          this.stopStreamingMode();
-          this.showNotification('Trial limit reached! Add your API key to continue.', 'error');
-        } else if (response.remaining <= 5) {
-          this.showNotification(`Only ${response.remaining} trial requests remaining!`, 'warning');
-        }
-      }
-    };
-
-    this.speechProcessor.setUsageCallback(trackUsage);
-    this.commandProcessor.setUsageCallback(trackUsage);
     this.commandProcessor.setErrorCallback((errorMsg) => {
       this.emitActivity('error', 'Claude error', errorMsg);
     });
@@ -163,10 +125,7 @@ class VoiceController {
   setupMessageListeners() {
     log('INFO', 'Setting up message listeners');
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      log('INFO', 'Message received from extension', {
-        action: message.action,
-        hasApiKey: !!message.apiKey
-      });
+      log('INFO', 'Message received from extension', { action: message.action });
 
       try {
         switch (message.action) {
@@ -186,14 +145,10 @@ class VoiceController {
             this.toggleStreamingMode();
             sendResponse({ success: true, message: 'Voice control toggled' });
             break;
-          case 'updateApiKey':
-            this.updateApiKey(message.apiKey);
-            sendResponse({ success: true, message: 'API key updated' });
-            break;
-          case 'usageUpdate':
-            // Handle usage updates from background script
-            this.usageStats = message.stats;
-            log('INFO', 'Usage stats updated', { stats: this.usageStats });
+          case 'apiKeyUpdated':
+            // Re-initialize with new keys
+            this.initialize();
+            sendResponse({ success: true, message: 'Reinitializing with new keys' });
             break;
           case 'getPermissionStatus':
             this.getPermissionStatus().then((status) => {
@@ -223,21 +178,9 @@ class VoiceController {
       return;
     }
 
-    // Check if we can make requests
-    const response = await chrome.runtime.sendMessage({ action: 'canMakeRequest' });
-    if (!response.canMakeRequest) {
-      log('WARN', 'Cannot start streaming - limit reached or no API key');
-      if (response.limitReached) {
-        this.showNotification('Trial limit reached (100/100). Please add your API key in settings.', 'error');
-      } else {
-        this.showNotification('Please configure your OpenAI API key first', 'warning');
-      }
-      return;
-    }
-
     if (!this.apiKey) {
       log('WARN', 'Cannot start streaming - no API key');
-      this.showNotification('Please configure your OpenAI API key first', 'warning');
+      this.showNotification('Please configure your API keys in Settings first', 'warning');
       return;
     }
 
@@ -290,13 +233,6 @@ class VoiceController {
     } else {
       this.startStreamingMode();
     }
-  }
-
-  updateApiKey(apiKey) {
-    log('INFO', 'Updating API key', { hasApiKey: !!apiKey });
-    this.apiKey = apiKey;
-    this.speechProcessor = new SpeechProcessor(apiKey);
-    log('INFO', 'API key updated and SpeechProcessor reinitialized');
   }
 
   emitActivity(category, label, content) {

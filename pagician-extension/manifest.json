@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Pagician",
   "version": "1.0.7",
-  "description": "Control web page elements with your voice! Say 'make it blue' or 'make it bigger' to transform any element. 100 free trials.",
+  "description": "Control web page elements with your voice! Say 'make it blue' or 'make it bigger' to transform any element.",
   "permissions": [
     "activeTab",
     "storage",

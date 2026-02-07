@@ -11,18 +11,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const permissionStatus = document.getElementById('permissionStatus');
   const permissionIndicator = permissionStatus.querySelector('.permission-indicator');
   const permissionText = permissionStatus.querySelector('.permission-text');
-  const usageStatus = document.getElementById('usageStatus');
-  const usageBar = document.getElementById('usageBar');
-  const usageText = document.getElementById('usageText');
-  const limitWarning = document.getElementById('limitWarning');
-  const upgradeBtn = document.getElementById('upgradeBtn');
   const logContainer = document.getElementById('logContainer');
   const clearLogBtn = document.getElementById('clearLogBtn');
 
   let isActive = false;
   const MAX_LOG_ENTRIES = 200;
 
-  // ── Controls (adapted from popup.js) ──
+  // ── Controls ──
 
   async function loadVoiceControlState() {
     try {
@@ -34,56 +29,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  async function checkApiKey() {
+  async function checkApiKeys() {
     try {
-      const response = await chrome.runtime.sendMessage({ action: 'getUsageStats' });
+      const response = await chrome.runtime.sendMessage({ action: 'getKeyStatus' });
 
       if (response && response.success) {
-        const stats = response.stats;
+        const status = response.status;
         apiIndicator.className = 'api-indicator';
 
-        if (stats.mode === 'user') {
+        if (status.ready) {
           apiIndicator.classList.add('valid');
           apiText.classList.add('valid');
-          apiText.textContent = 'Using Your API Key';
-          if (usageStatus) usageStatus.style.display = 'none';
-          if (limitWarning) limitWarning.style.display = 'none';
+          apiText.textContent = 'API Keys Configured';
           return true;
+        } else if (status.hasOpenAi && !status.hasAnthropic) {
+          apiIndicator.classList.remove('valid');
+          apiText.classList.remove('valid');
+          apiText.textContent = 'Missing Anthropic Key';
+          return false;
+        } else if (!status.hasOpenAi && status.hasAnthropic) {
+          apiIndicator.classList.remove('valid');
+          apiText.classList.remove('valid');
+          apiText.textContent = 'Missing OpenAI Key';
+          return false;
         } else {
-          if (stats.limitReached) {
-            apiIndicator.classList.remove('valid');
-            apiText.classList.remove('valid');
-            apiText.textContent = 'Trial Expired';
-            if (usageStatus) usageStatus.style.display = 'block';
-            if (limitWarning) limitWarning.style.display = 'block';
-            const percentage = Math.min(100, stats.percentage);
-            if (usageBar) usageBar.style.width = `${percentage}%`;
-            if (usageText) {
-              usageText.textContent = `Trial: ${stats.used}/${stats.limit} requests used`;
-              usageText.style.color = '#dc2626';
-            }
-            return false;
-          } else {
-            apiIndicator.classList.add('valid');
-            apiText.classList.add('valid');
-            apiText.textContent = 'Using Free Trial';
-            if (usageStatus) usageStatus.style.display = 'block';
-            if (limitWarning) limitWarning.style.display = 'none';
-            const percentage = Math.min(100, stats.percentage);
-            if (usageBar) usageBar.style.width = `${percentage}%`;
-            if (usageText) {
-              usageText.textContent = `Trial: ${stats.used}/${stats.limit} requests used`;
-              if (stats.remaining <= 10) {
-                usageText.style.color = '#dc2626';
-                usageText.textContent += ` (${stats.remaining} left!)`;
-              } else if (stats.remaining <= 20) {
-                usageText.style.color = '#f59e0b';
-              } else {
-                usageText.style.color = '#374151';
-              }
-            }
-            return true;
-          }
+          apiIndicator.classList.remove('valid');
+          apiText.classList.remove('valid');
+          apiText.textContent = 'API Keys Not Set';
+          return false;
         }
       } else {
         return false;
@@ -132,7 +105,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function updateUI() {
-    const hasApiKey = await checkApiKey();
+    const hasKeys = await checkApiKeys();
     await checkPermissionStatus();
 
     if (isActive) {
@@ -147,16 +120,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       statusText.textContent = 'Inactive';
     }
 
-    if (!hasApiKey) {
+    if (!hasKeys) {
       toggleBtn.disabled = true;
       toggleBtn.style.opacity = '0.5';
       toggleBtn.style.cursor = 'not-allowed';
-      try {
-        const response = await chrome.runtime.sendMessage({ action: 'getUsageStats' });
-        if (response && response.success && response.stats.limitReached) {
-          btnText.textContent = 'Trial Limit Reached';
-        }
-      } catch {}
+      btnText.textContent = 'Configure API Keys';
     } else {
       toggleBtn.disabled = false;
       toggleBtn.style.opacity = '1';
@@ -165,8 +133,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   toggleBtn.addEventListener('click', async () => {
-    const hasApiKey = await checkApiKey();
-    if (!hasApiKey) {
+    const hasKeys = await checkApiKeys();
+    if (!hasKeys) {
       chrome.runtime.openOptionsPage();
       return;
     }
@@ -205,15 +173,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.runtime.openOptionsPage();
   });
 
-  if (upgradeBtn) {
-    upgradeBtn.addEventListener('click', () => {
-      chrome.runtime.openOptionsPage();
-    });
-  }
-
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'sync' && changes.userApiKey) {
-      checkApiKey();
+    if (namespace === 'sync' && (changes.openaiApiKey || changes.anthropicApiKey)) {
+      checkApiKeys();
       updateUI();
     }
     if (namespace === 'local' && changes.isVoiceControlActive) {

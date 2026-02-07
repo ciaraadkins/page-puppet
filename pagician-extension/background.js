@@ -36,21 +36,11 @@ function sendToSidePanel(data) {
 importScripts('api-key-manager.js');
 const apiKeyManager = new ApiKeyManager();
 
-// Initialize API key manager on startup
-apiKeyManager.initialize().then(() => {
-  log('INFO', 'API Key Manager initialized');
-}).catch(error => {
-  log('ERROR', 'Failed to initialize API Key Manager', { error: error.message });
-});
-
 chrome.runtime.onInstalled.addListener((details) => {
   log('INFO', 'Extension installed/updated', {
     reason: details.reason,
     previousVersion: details.previousVersion
   });
-
-  // Initialize API key manager on install
-  apiKeyManager.initialize();
 
   chrome.contextMenus.create({
     id: 'toggleVoiceControl',
@@ -100,232 +90,136 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     senderUrl: sender.tab?.url
   });
 
-  // Handle API key and stats request from content script
-  if (message.action === 'getApiKeyAndStats') {
-    log('INFO', 'Getting API key and stats');
+  // Get OpenAI API key for content script
+  if (message.action === 'getApiKeys') {
+    log('INFO', 'Getting API keys status');
 
-    Promise.all([
-      apiKeyManager.getActiveApiKey(),
-      apiKeyManager.getUsageStats()
-    ]).then(([apiKey, stats]) => {
-      log('INFO', 'API key and stats retrieved', {
-        hasKey: !!apiKey,
-        stats
-      });
-
-      sendResponse({
-        success: true,
-        apiKey: apiKey,
-        mode: stats.mode,
-        stats: stats
-      });
-    }).catch(error => {
-      log('ERROR', 'Failed to get API key and stats', { error: error.message });
-      sendResponse({
-        success: false,
-        error: error.message,
-        limitReached: error.message.includes('limit')
-      });
-    });
-
-    return true; // Keep channel open for async response
-  }
-
-  // Handle usage increment from content script
-  if (message.action === 'incrementUsage') {
-    log('INFO', 'Incrementing usage counter');
-
-    apiKeyManager.incrementUsage().then(usage => {
-      log('INFO', 'Usage incremented', { usage });
-
-      // Send usage update to all tabs
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, {
-            action: 'usageUpdate',
-            stats: usage
-          }).catch(() => {
-            // Ignore errors for tabs without content script
-          });
-        });
-      });
-
-      sendResponse({
-        success: true,
-        ...usage
-      });
-    }).catch(error => {
-      log('ERROR', 'Failed to increment usage', { error: error.message });
-      sendResponse({
-        success: false,
-        error: error.message
-      });
-    });
-
-    return true; // Keep channel open for async response
-  }
-
-  // Check if we can make a request
-  if (message.action === 'canMakeRequest') {
-    log('INFO', 'Checking if request can be made');
-
-    apiKeyManager.canMakeRequest().then(canRequest => {
-      apiKeyManager.getUsageStats().then(stats => {
-        log('INFO', 'Request check complete', { canRequest, stats });
+    apiKeyManager.getOpenAiKey().then(openaiKey => {
+      apiKeyManager.getKeyStatus().then(status => {
+        log('INFO', 'API key status retrieved', { status });
         sendResponse({
-          canMakeRequest: canRequest,
-          limitReached: stats.limitReached || false,
-          stats: stats
+          success: true,
+          openaiKey: openaiKey,
+          keyStatus: status
         });
       });
     }).catch(error => {
-      log('ERROR', 'Failed to check request ability', { error: error.message });
-      sendResponse({
-        canMakeRequest: false,
-        error: error.message
-      });
-    });
-
-    return true; // Keep channel open for async response
-  }
-
-  // Get usage statistics
-  if (message.action === 'getUsageStats') {
-    log('INFO', 'Getting usage statistics');
-
-    apiKeyManager.getUsageStats().then(stats => {
-      log('INFO', 'Usage statistics retrieved', { stats });
-      sendResponse({
-        success: true,
-        stats: stats
-      });
-    }).catch(error => {
-      log('ERROR', 'Failed to get usage stats', { error: error.message });
+      log('ERROR', 'Failed to get API keys', { error: error.message });
       sendResponse({
         success: false,
         error: error.message
       });
     });
 
-    return true; // Keep channel open for async response
+    return true;
   }
 
-  // Update user API key
-  if (message.action === 'setUserApiKey') {
-    log('INFO', 'Setting user API key');
+  // Save OpenAI API key
+  if (message.action === 'setOpenAiKey') {
+    log('INFO', 'Setting OpenAI API key');
 
-    apiKeyManager.setUserApiKey(message.apiKey).then(() => {
-      log('INFO', 'User API key updated successfully');
+    apiKeyManager.setOpenAiKey(message.apiKey).then(() => {
+      log('INFO', 'OpenAI API key saved');
 
-      // Notify all tabs of the change
       chrome.tabs.query({}, (tabs) => {
         tabs.forEach(tab => {
           chrome.tabs.sendMessage(tab.id, {
-            action: 'apiKeyUpdated',
-            mode: 'user'
-          }).catch(() => {
-            // Ignore errors for tabs without content script
-          });
+            action: 'apiKeyUpdated'
+          }).catch(() => {});
         });
       });
 
-      sendResponse({
-        success: true,
-        message: 'API key updated'
-      });
+      sendResponse({ success: true });
     }).catch(error => {
-      log('ERROR', 'Failed to set user API key', { error: error.message });
-      sendResponse({
-        success: false,
-        error: error.message
-      });
+      log('ERROR', 'Failed to save OpenAI API key', { error: error.message });
+      sendResponse({ success: false, error: error.message });
     });
 
-    return true; // Keep channel open for async response
+    return true;
   }
 
-  // Switch API key mode
-  if (message.action === 'switchMode') {
-    log('INFO', 'Switching API key mode', { mode: message.mode });
+  // Save Anthropic API key
+  if (message.action === 'setAnthropicKey') {
+    log('INFO', 'Setting Anthropic API key');
 
-    apiKeyManager.switchMode(message.mode).then(() => {
-      log('INFO', 'API key mode switched', { mode: message.mode });
-
-      // Notify all tabs of the change
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, {
-            action: 'modeChanged',
-            mode: message.mode
-          }).catch(() => {
-            // Ignore errors for tabs without content script
-          });
-        });
-      });
-
-      sendResponse({
-        success: true,
-        message: `Switched to ${message.mode} mode`
-      });
+    apiKeyManager.setAnthropicKey(message.apiKey).then(() => {
+      log('INFO', 'Anthropic API key saved');
+      sendResponse({ success: true });
     }).catch(error => {
-      log('ERROR', 'Failed to switch mode', { error: error.message });
-      sendResponse({
-        success: false,
-        error: error.message
-      });
+      log('ERROR', 'Failed to save Anthropic API key', { error: error.message });
+      sendResponse({ success: false, error: error.message });
     });
 
-    return true; // Keep channel open for async response
+    return true;
+  }
+
+  // Get key configuration status
+  if (message.action === 'getKeyStatus') {
+    apiKeyManager.getKeyStatus().then(status => {
+      sendResponse({ success: true, status });
+    }).catch(error => {
+      sendResponse({ success: false, error: error.message });
+    });
+
+    return true;
   }
 
   // Proxy Claude API calls from content script (avoids CORS issues)
   if (message.action === 'claudeComplete') {
     log('INFO', 'Proxying Claude API request');
 
-    const CLAUDE_API_KEY = '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';
-
-    fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
-        system: message.systemPrompt,
-        messages: [
-          { role: 'user', content: message.userMessage }
-        ],
-        output_config: {
-          format: {
-            type: 'json_schema',
-            schema: message.schema
-          }
-        }
-      })
-    }).then(async (response) => {
-      if (!response.ok) {
-        const errorText = await response.text();
-        log('ERROR', 'Claude API request failed', {
-          status: response.status,
-          body: errorText
-        });
-        sendResponse({ success: false, error: `Claude API error: ${response.status} — ${errorText}` });
+    apiKeyManager.getAnthropicKey().then(anthropicKey => {
+      if (!anthropicKey) {
+        sendResponse({ success: false, error: 'Anthropic API key not configured. Please add it in Settings.' });
         return;
       }
 
-      const result = await response.json();
-      log('INFO', 'Claude API response received', {
-        stopReason: result.stop_reason,
-        contentLength: result.content?.[0]?.text?.length
-      });
+      fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: message.systemPrompt,
+          messages: [
+            { role: 'user', content: message.userMessage }
+          ],
+          output_config: {
+            format: {
+              type: 'json_schema',
+              schema: message.schema
+            }
+          }
+        })
+      }).then(async (response) => {
+        if (!response.ok) {
+          const errorText = await response.text();
+          log('ERROR', 'Claude API request failed', {
+            status: response.status,
+            body: errorText
+          });
+          sendResponse({ success: false, error: `Claude API error: ${response.status} — ${errorText}` });
+          return;
+        }
 
-      sendResponse({ success: true, result });
-    }).catch((error) => {
-      log('ERROR', 'Claude API fetch failed', { error: error.message });
+        const result = await response.json();
+        log('INFO', 'Claude API response received', {
+          stopReason: result.stop_reason,
+          contentLength: result.content?.[0]?.text?.length
+        });
+
+        sendResponse({ success: true, result });
+      }).catch((error) => {
+        log('ERROR', 'Claude API fetch failed', { error: error.message });
+        sendResponse({ success: false, error: error.message });
+      });
+    }).catch(error => {
+      log('ERROR', 'Failed to get Anthropic key', { error: error.message });
       sendResponse({ success: false, error: error.message });
     });
 
