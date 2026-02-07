@@ -1,25 +1,10 @@
-function log(level, message, data = {}) {
-  const timestamp = new Date().toISOString();
-  const logEntry = {
-    timestamp,
-    level,
-    component: 'OPTIONS',
-    message,
-    ...data
-  };
-
-  console.log(`[${timestamp}] [${level}] [OPTIONS] ${message}`, data);
-
-  // Store recent logs in local storage for debugging
-  try {
-    let logs = JSON.parse(localStorage.getItem('voiceControlOptionsLogs') || '[]');
-    logs.push(logEntry);
-    if (logs.length > 50) logs.shift();
-    localStorage.setItem('voiceControlOptionsLogs', JSON.stringify(logs));
-  } catch (e) {
-    // Ignore storage errors
-  }
-}
+configureLogger({
+  component: 'OPTIONS',
+  storage: 'local',
+  maxEntries: 50,
+  storageKey: 'voiceControlOptionsLogs',
+  consoleFilter: null
+});
 
 log('INFO', 'Options script loading');
 
@@ -127,20 +112,17 @@ document.addEventListener('DOMContentLoaded', () => {
     log('INFO', 'Loading settings from storage');
     const result = await chrome.storage.sync.get([
       'userApiKey',
-      'openaiApiKey',
       'confidenceThreshold',
       'recordingDuration'
     ]);
 
     log('INFO', 'Settings loaded', {
       hasUserApiKey: !!result.userApiKey,
-      hasLegacyApiKey: !!result.openaiApiKey,
       confidenceThreshold: result.confidenceThreshold,
       recordingDuration: result.recordingDuration
     });
 
-    // Check for user API key first, then legacy key
-    const apiKey = result.userApiKey || result.openaiApiKey;
+    const apiKey = result.userApiKey;
     if (apiKey) {
       apiKeyInput.value = apiKey;
       log('DEBUG', 'API key loaded into input');

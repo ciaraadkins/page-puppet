@@ -15,25 +15,10 @@ class ApiKeyManager {
     const storage = await chrome.storage.sync.get([
       'userApiKey',
       'defaultKeyUsage',
-      'apiKeyMode',
-      'openaiApiKey' // Legacy field for migration
+      'apiKeyMode'
     ]);
 
-    // Handle migration from old system
-    if (storage.openaiApiKey && !storage.userApiKey) {
-      // Migrate existing key to new system
-      await chrome.storage.sync.set({
-        userApiKey: storage.openaiApiKey,
-        apiKeyMode: 'user',
-        defaultKeyUsage: {
-          totalRequests: 0,
-          firstUsedDate: null,
-          limitReached: false
-        }
-      });
-      // Keep the old key for backward compatibility temporarily
-      console.log('[ApiKeyManager] Migrated existing API key to new system');
-    } else if (!storage.apiKeyMode) {
+    if (!storage.apiKeyMode) {
       // New installation - set up default trial
       await chrome.storage.sync.set({
         apiKeyMode: 'default',
@@ -183,8 +168,7 @@ class ApiKeyManager {
 
     await chrome.storage.sync.set({
       userApiKey: apiKey,
-      apiKeyMode: 'user', // Automatically switch to user mode
-      openaiApiKey: apiKey // Keep legacy field for compatibility
+      apiKeyMode: 'user'
     });
 
     console.log('[ApiKeyManager] User API key updated and mode switched to user');
@@ -198,7 +182,7 @@ class ApiKeyManager {
     const canUseDefault = storage.defaultKeyUsage &&
                          storage.defaultKeyUsage.totalRequests < this.USAGE_LIMIT;
 
-    await chrome.storage.sync.remove(['userApiKey', 'openaiApiKey']);
+    await chrome.storage.sync.remove(['userApiKey']);
 
     if (canUseDefault) {
       await chrome.storage.sync.set({ apiKeyMode: 'default' });

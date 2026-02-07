@@ -1,36 +1,5 @@
-function log(level, message, data = {}) {
-  const timestamp = new Date().toISOString();
-  const logEntry = {
-    timestamp,
-    level,
-    component: 'POPUP',
-    message,
-    ...data
-  };
-
-  console.log(`[${timestamp}] [${level}] [POPUP] ${message}`, data);
-
-  // Also log errors to console.error for better visibility
-  if (level === 'ERROR') {
-    console.error(`🚨 [POPUP ERROR] ${message}`, data);
-  }
-
-  // Store recent logs in local storage for debugging
-  try {
-    let logs = JSON.parse(localStorage.getItem('voiceControlPopupLogs') || '[]');
-    logs.push(logEntry);
-    if (logs.length > 50) logs.shift();
-    localStorage.setItem('voiceControlPopupLogs', JSON.stringify(logs));
-  } catch (e) {
-    // Ignore storage errors
-  }
-}
-
-log('INFO', 'Popup script loading');
-
 document.addEventListener('DOMContentLoaded', async () => {
-  log('INFO', 'DOM content loaded, initializing popup');
-
+  // ── UI element references ──
   const toggleBtn = document.getElementById('toggleBtn');
   const btnText = toggleBtn.querySelector('.btn-text');
   const statusIndicator = document.getElementById('statusIndicator');
@@ -47,43 +16,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   const usageText = document.getElementById('usageText');
   const limitWarning = document.getElementById('limitWarning');
   const upgradeBtn = document.getElementById('upgradeBtn');
-
-  log('INFO', 'UI elements found', {
-    hasToggleBtn: !!toggleBtn,
-    hasBtnText: !!btnText,
-    hasStatusIndicator: !!statusIndicator
-  });
+  const logContainer = document.getElementById('logContainer');
+  const clearLogBtn = document.getElementById('clearLogBtn');
 
   let isActive = false;
+  const MAX_LOG_ENTRIES = 200;
+
+  // ── Controls (adapted from popup.js) ──
 
   async function loadVoiceControlState() {
-    log('INFO', 'Loading voice control state from storage');
     try {
       const result = await chrome.storage.local.get(['isVoiceControlActive']);
       isActive = result.isVoiceControlActive || false;
-      log('INFO', 'Voice control state loaded', { isActive });
       return isActive;
-    } catch (error) {
-      log('ERROR', 'Failed to load voice control state', { error: error.message });
+    } catch {
       return false;
     }
   }
 
   async function checkApiKey() {
-    log('INFO', 'Checking API key and usage status');
-
     try {
-      // Get usage stats from background script
       const response = await chrome.runtime.sendMessage({ action: 'getUsageStats' });
 
       if (response && response.success) {
         const stats = response.stats;
-        log('INFO', 'Usage stats retrieved', { stats });
-
         apiIndicator.className = 'api-indicator';
 
         if (stats.mode === 'user') {
-          // Using user's API key
           apiIndicator.classList.add('valid');
           apiText.classList.add('valid');
           apiText.textContent = 'Using Your API Key';
@@ -91,22 +50,18 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (limitWarning) limitWarning.style.display = 'none';
           return true;
         } else {
-          // Using default trial key
           if (stats.limitReached) {
             apiIndicator.classList.remove('valid');
             apiText.classList.remove('valid');
             apiText.textContent = 'Trial Expired';
             if (usageStatus) usageStatus.style.display = 'block';
             if (limitWarning) limitWarning.style.display = 'block';
-
-            // Update usage display
             const percentage = Math.min(100, stats.percentage);
             if (usageBar) usageBar.style.width = `${percentage}%`;
             if (usageText) {
               usageText.textContent = `Trial: ${stats.used}/${stats.limit} requests used`;
               usageText.style.color = '#dc2626';
             }
-
             return false;
           } else {
             apiIndicator.classList.add('valid');
@@ -114,14 +69,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             apiText.textContent = 'Using Free Trial';
             if (usageStatus) usageStatus.style.display = 'block';
             if (limitWarning) limitWarning.style.display = 'none';
-
-            // Update usage display
             const percentage = Math.min(100, stats.percentage);
             if (usageBar) usageBar.style.width = `${percentage}%`;
             if (usageText) {
               usageText.textContent = `Trial: ${stats.used}/${stats.limit} requests used`;
-
-              // Color code based on usage
               if (stats.remaining <= 10) {
                 usageText.style.color = '#dc2626';
                 usageText.textContent += ` (${stats.remaining} left!)`;
@@ -131,50 +82,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                 usageText.style.color = '#374151';
               }
             }
-
             return true;
           }
         }
       } else {
-        // Fallback to old check
-        const result = await chrome.storage.sync.get(['openaiApiKey']);
-        const hasApiKey = !!(result.openaiApiKey && result.openaiApiKey.trim());
-
-        if (hasApiKey) {
-          apiIndicator.classList.add('valid');
-          apiText.classList.add('valid');
-          apiText.textContent = 'API Key Configured';
-        } else {
-          apiIndicator.classList.remove('valid');
-          apiText.classList.remove('valid');
-          apiText.textContent = 'API Key Not Set - Click Settings';
-        }
-
-        return hasApiKey;
+        return false;
       }
-    } catch (error) {
-      log('ERROR', 'Failed to check API status', { error: error.message });
+    } catch {
       return false;
     }
   }
 
   async function checkPermissionStatus() {
-    log('INFO', 'Checking permission status');
-
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        action: 'getPermissionStatus'
-      });
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'getPermissionStatus' });
 
       if (response && response.success) {
         const { status } = response.status;
-        log('INFO', 'Permission status received', response.status);
-
-        // Update UI based on permission status
         permissionIndicator.className = 'permission-indicator';
-
         switch (status) {
           case 'granted':
             permissionIndicator.classList.add('granted');
@@ -192,16 +118,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             permissionIndicator.classList.add('unknown');
             permissionText.textContent = 'Microphone: Unknown';
         }
-
         return status;
       } else {
-        log('WARN', 'Failed to get permission status', { response });
         permissionIndicator.className = 'permission-indicator unknown';
         permissionText.textContent = 'Microphone: Unknown';
         return 'unknown';
       }
-    } catch (error) {
-      log('ERROR', 'Error checking permission status', { error: error.message });
+    } catch {
       permissionIndicator.className = 'permission-indicator error';
       permissionText.textContent = 'Microphone: Error';
       return 'error';
@@ -209,7 +132,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function updateUI() {
-    log('INFO', 'Updating UI', { isActive });
     const hasApiKey = await checkApiKey();
     await checkPermissionStatus();
 
@@ -218,60 +140,42 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnText.textContent = 'Stop Voice Control';
       statusIndicator.classList.add('active');
       statusText.textContent = 'Active';
-      log('DEBUG', 'UI updated to active state');
     } else {
       toggleBtn.classList.remove('active');
       btnText.textContent = 'Start Voice Control';
       statusIndicator.classList.remove('active');
       statusText.textContent = 'Inactive';
-      log('DEBUG', 'UI updated to inactive state');
     }
 
     if (!hasApiKey) {
       toggleBtn.disabled = true;
       toggleBtn.style.opacity = '0.5';
       toggleBtn.style.cursor = 'not-allowed';
-
-      // Check if it's due to trial limit
       try {
         const response = await chrome.runtime.sendMessage({ action: 'getUsageStats' });
         if (response && response.success && response.stats.limitReached) {
           btnText.textContent = 'Trial Limit Reached';
         }
-      } catch (error) {
-        log('ERROR', 'Failed to check usage stats', { error: error.message });
-      }
-
-      log('DEBUG', 'Button disabled due to missing API key or limit reached');
+      } catch {}
     } else {
       toggleBtn.disabled = false;
       toggleBtn.style.opacity = '1';
       toggleBtn.style.cursor = 'pointer';
-      log('DEBUG', 'Button enabled');
     }
   }
 
   toggleBtn.addEventListener('click', async () => {
-    log('INFO', 'Toggle button clicked');
-
     const hasApiKey = await checkApiKey();
     if (!hasApiKey) {
-      log('WARN', 'Toggle blocked - no API key');
-      alert('Please configure your OpenAI API key in the settings first.');
       chrome.runtime.openOptionsPage();
       return;
     }
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      log('INFO', 'Current tab found', { tabId: tab.id, tabUrl: tab.url });
-
       isActive = !isActive;
-      log('INFO', 'Toggling state', { newState: isActive });
-
       const action = isActive ? 'startStreaming' : 'stopStreaming';
 
-      // Add visual feedback immediately
       if (isActive) {
         btnText.textContent = 'Starting...';
         toggleBtn.disabled = true;
@@ -279,54 +183,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       chrome.tabs.sendMessage(tab.id, { action }, (response) => {
         if (chrome.runtime.lastError) {
-          log('ERROR', 'Failed to send message to content script', {
-            error: chrome.runtime.lastError.message
-          });
-
-          // Show error and don't close popup
-          alert(`Failed to communicate with page: ${chrome.runtime.lastError.message}\n\nTry refreshing the page and try again.`);
-          isActive = false; // Revert state
+          isActive = false;
           toggleBtn.disabled = false;
           updateUI();
           return;
         }
-
-        // Check content script response
-        if (response && response.success) {
-          log('INFO', 'Content script confirmed action success', { response });
-        } else if (response && !response.success) {
-          log('ERROR', 'Content script reported failure', { response });
-          alert(`Voice control failed: ${response.error || 'Unknown error'}`);
-          isActive = false; // Revert state
+        if (response && !response.success) {
+          isActive = false;
           toggleBtn.disabled = false;
-          updateUI();
-          return;
-        } else {
-          log('WARN', 'No response from content script', { response });
-          // Continue anyway - might still work
         }
-
         updateUI();
-
-        if (isActive) {
-          log('INFO', 'Voice control started successfully, closing popup in 2000ms (debug delay)');
-          // Increased delay for debugging - you can see any errors
-          setTimeout(() => {
-            window.close();
-          }, 2000);
-        }
       });
-    } catch (error) {
-      log('ERROR', 'Error toggling voice control', {
-        error: error.message,
-        stack: error.stack
-      });
-
-      // More detailed error message
-      const errorMsg = `Voice control error: ${error.message}. Check console for details.`;
-      alert(errorMsg);
-
-      // Reset button state
+    } catch {
       isActive = false;
       toggleBtn.disabled = false;
       updateUI();
@@ -334,34 +202,71 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   settingsBtn.addEventListener('click', () => {
-    log('INFO', 'Settings button clicked, opening options page');
     chrome.runtime.openOptionsPage();
   });
 
-  // Add upgrade button handler
   if (upgradeBtn) {
     upgradeBtn.addEventListener('click', () => {
-      log('INFO', 'Upgrade button clicked');
       chrome.runtime.openOptionsPage();
     });
   }
 
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    log('INFO', 'Storage changed', { namespace, changes: Object.keys(changes) });
-    if (namespace === 'sync' && changes.openaiApiKey) {
-      log('INFO', 'API key changed, updating UI');
+    if (namespace === 'sync' && changes.userApiKey) {
       checkApiKey();
       updateUI();
     }
     if (namespace === 'local' && changes.isVoiceControlActive) {
-      log('INFO', 'Voice control state changed, updating UI');
       isActive = changes.isVoiceControlActive.newValue || false;
       updateUI();
     }
   });
 
-  // Load the current voice control state before updating UI
+  // ── Activity Log ──
+
+  function formatTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function addLogEntry(category, label, content, time) {
+    // Remove empty-state message if present
+    const empty = logContainer.querySelector('.log-empty');
+    if (empty) empty.remove();
+
+    const entry = document.createElement('div');
+    entry.className = `log-entry cat-${category}`;
+    entry.innerHTML = `<span class="log-time">${formatTime(time)}</span><span class="log-label">${label}:</span><span class="log-content">${escapeHtml(content)}</span>`;
+    logContainer.appendChild(entry);
+
+    // Cap entries
+    while (logContainer.children.length > MAX_LOG_ENTRIES) {
+      logContainer.removeChild(logContainer.firstChild);
+    }
+
+    // Auto-scroll to bottom
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  clearLogBtn.addEventListener('click', () => {
+    logContainer.innerHTML = '<div class="log-empty">Activity will appear here when voice control is active.</div>';
+  });
+
+  // Connect to background for activity log relay
+  const port = chrome.runtime.connect({ name: 'sidepanel' });
+  port.onMessage.addListener((msg) => {
+    if (msg.type === 'activityLog') {
+      addLogEntry(msg.category, msg.label, msg.content, msg.time);
+    }
+  });
+
+  // ── Init ──
   await loadVoiceControlState();
   updateUI();
-  log('INFO', 'Popup initialization complete');
 });

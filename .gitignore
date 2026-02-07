@@ -33,4 +33,5 @@ ehthumbs.db
 # Documentation and demo files (keep local only)
 docs/instructions.md
 docs/instructions-v2.md
+docs/api-keys.md
 website/landing-page.html
