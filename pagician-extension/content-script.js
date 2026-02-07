@@ -13,6 +13,13 @@ class VoiceController {
     this.apiKeyMode = null;
     this.usageStats = null;
 
+    // Transcript accumulator for partial/rejected transcripts
+    this.transcriptAccumulator = '';
+    this.accumulatorFailCount = 0;
+    this.accumulatorTimestamp = null;
+    this.ACCUMULATOR_MAX_FAILS = 3;
+    this.ACCUMULATOR_STALENESS_MS = 15000;
+
     log('INFO', 'VoiceController initialized, starting initialization (no audio permissions)');
     this.initialize();
   }
@@ -263,6 +270,7 @@ class VoiceController {
     }
 
     this.isStreamingMode = false;
+    this.clearAccumulator();
     this.elementDetector.deactivate();
     this.audioCapture.stopStreamingMode();
 
@@ -302,42 +310,32 @@ class VoiceController {
     }
   }
 
-  async detectSilence(audioBlob) {
-    try {
-      // Convert blob to array buffer for analysis
-      const arrayBuffer = await audioBlob.arrayBuffer();
+  clearAccumulator() {
+    this.transcriptAccumulator = '';
+    this.accumulatorFailCount = 0;
+    this.accumulatorTimestamp = null;
+  }
 
-      // Create audio context for analysis
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  stashTranscript(transcript) {
+    this.accumulatorFailCount++;
+    this.accumulatorTimestamp = Date.now();
 
-      // Get audio data from first channel
-      const channelData = audioBuffer.getChannelData(0);
-
-      // Calculate RMS (Root Mean Square) to measure audio level
-      let sum = 0;
-      for (let i = 0; i < channelData.length; i++) {
-        sum += channelData[i] * channelData[i];
-      }
-      const rms = Math.sqrt(sum / channelData.length);
-
-      // Silence threshold - adjust as needed
-      const silenceThreshold = 0.01;
-      const isSilent = rms < silenceThreshold;
-
-      log('DEBUG', 'Audio level analysis', {
-        rms: rms.toFixed(4),
-        threshold: silenceThreshold,
-        isSilent,
-        duration: audioBuffer.duration.toFixed(2) + 's'
+    if (this.accumulatorFailCount >= this.ACCUMULATOR_MAX_FAILS) {
+      log('INFO', 'Accumulator fail limit reached, clearing', {
+        failCount: this.accumulatorFailCount,
+        accumulated: this.transcriptAccumulator
       });
-
-      audioContext.close();
-      return isSilent;
-    } catch (error) {
-      log('WARN', 'Failed to analyze audio for silence, processing anyway', { error: error.message });
-      return false; // If we can't detect silence, process the audio
+      this.emitActivity('status', 'Buffer cleared', `Cleared after ${this.ACCUMULATOR_MAX_FAILS} failed attempts`);
+      this.clearAccumulator();
+      return;
     }
+
+    this.transcriptAccumulator = transcript;
+    log('DEBUG', 'Transcript stashed in accumulator', {
+      accumulated: this.transcriptAccumulator,
+      failCount: this.accumulatorFailCount
+    });
+    this.emitActivity('status', 'Buffered', `"${transcript}" (attempt ${this.accumulatorFailCount}/${this.ACCUMULATOR_MAX_FAILS})`);
   }
 
   async processAudioBlob(audioBlob) {
@@ -355,13 +353,6 @@ class VoiceController {
       return;
     }
 
-    // Check for silence by analyzing audio data
-    const isSilent = await this.detectSilence(audioBlob);
-    if (isSilent) {
-      log('DEBUG', 'Skipping audio processing - silence detected', { audioSize: audioBlob.size });
-      return;
-    }
-
     try {
       const transcript = await this.speechProcessor.transcribeAudio(audioBlob);
       if (!transcript || transcript.length < 3) {
@@ -369,22 +360,35 @@ class VoiceController {
         return;
       }
 
-      log('INFO', 'Audio processed - got transcript', { transcript });
-      this.emitActivity('transcript', 'You said', transcript);
+      // Prepend accumulated text from previous rejected chunks
+      let fullTranscript = transcript;
+      if (this.transcriptAccumulator) {
+        const now = Date.now();
+        if (this.accumulatorTimestamp && (now - this.accumulatorTimestamp > this.ACCUMULATOR_STALENESS_MS)) {
+          log('DEBUG', 'Accumulator stale, clearing', { age: now - this.accumulatorTimestamp });
+          this.clearAccumulator();
+        } else {
+          fullTranscript = this.transcriptAccumulator + ' ' + transcript;
+          log('INFO', 'Prepended accumulated transcript', {
+            accumulated: this.transcriptAccumulator,
+            new: transcript,
+            combined: fullTranscript
+          });
+        }
+      }
+
+      log('INFO', 'Audio processed - got transcript', { transcript: fullTranscript });
+      this.emitActivity('transcript', 'You said', fullTranscript);
 
       const elementContext = this.elementDetector.getElementContext(
         this.elementDetector.currentElement
       );
 
-      this.emitActivity('status', 'Interpreting...', transcript);
+      this.emitActivity('status', 'Interpreting...', fullTranscript);
 
       const command = await this.commandProcessor.processCommand(
-        transcript, elementContext
+        fullTranscript, elementContext
       );
-
-      if (!command) {
-        this.emitActivity('error', 'No command', 'Claude returned no actionable command');
-      }
 
       // Apply higher confidence threshold for text and color commands to prevent defaults
       const isTextCommand = command && (command.action === 'addText' || command.action === 'changeText');
@@ -397,8 +401,7 @@ class VoiceController {
           action: command.action,
           confidence: command.confidence,
           threshold: confidenceThreshold,
-          isTextCommand,
-          isColorCommand
+          hadAccumulated: !!this.transcriptAccumulator
         });
 
         const success = this.domManipulator.executeCommand(
@@ -409,16 +412,19 @@ class VoiceController {
           this.showFeedback(`Applied: ${command.action} - ${command.value}`);
           this.emitActivity('applied', 'Applied', `${command.action} — ${command.value}`);
           log('INFO', 'Command executed successfully');
+          this.clearAccumulator();
         } else {
           this.emitActivity('error', 'Failed', `Could not execute: ${command.action}`);
           log('WARN', 'Command execution failed');
+          this.stashTranscript(fullTranscript);
         }
       } else if (command) {
-        this.emitActivity('error', 'Rejected', `Low confidence (${command.confidence})`);
-        log('DEBUG', 'Command rejected', {
-          hasCommand: !!command,
-          confidence: command?.confidence
-        });
+        this.emitActivity('error', 'Rejected', `Low confidence (${command.confidence}) — buffering`);
+        log('DEBUG', 'Command rejected, stashing transcript', { confidence: command.confidence });
+        this.stashTranscript(fullTranscript);
+      } else {
+        this.emitActivity('error', 'No command', 'Buffering transcript for next attempt');
+        this.stashTranscript(fullTranscript);
       }
     } catch (error) {
       this.emitActivity('error', 'Error', error.message);

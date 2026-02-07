@@ -4,14 +4,30 @@ class AudioCapture {
     this.audioChunks = [];
     this.isRecording = false;
     this.streamingMode = false;
-    this.streamingTimeout = null;
     this.processCallback = null;
+    this.suppressNextBlob = false;
+
+    // VAD state
+    this.micStream = null;
+    this.audioContext = null;
+    this.analyserNode = null;
+    this.vadInterval = null;
+    this.voiceState = 'SILENT'; // 'SILENT' | 'SPEAKING' | 'TRAILING_SILENCE'
+    this.silenceStartTime = null;
+    this.recordingStartTime = null;
+
+    // VAD tuning constants
+    this.SILENCE_THRESHOLD = 0.01;
+    this.TRAILING_SILENCE_MS = 1500;
+    this.MAX_CHUNK_DURATION_MS = 15000;
+    this.MIN_CHUNK_DURATION_MS = 500;
+    this.VAD_POLL_INTERVAL_MS = 50;
   }
 
   async initializeRecording() {
     log('INFO', 'Initializing audio recording');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           sampleRate: 16000,
@@ -22,7 +38,7 @@ class AudioCapture {
 
       log('INFO', 'Microphone access granted');
 
-      this.mediaRecorder = new MediaRecorder(stream, {
+      this.mediaRecorder = new MediaRecorder(this.micStream, {
         mimeType: 'audio/webm;codecs=opus'
       });
 
@@ -52,12 +68,15 @@ class AudioCapture {
 
     this.mediaRecorder.onstop = () => {
       const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-      log('INFO', 'Recording stopped, processing audio', {
+      log('INFO', 'Recording stopped', {
         blobSize: audioBlob.size,
         chunks: this.audioChunks.length
       });
 
-      if (this.processCallback) {
+      if (this.suppressNextBlob) {
+        log('DEBUG', 'Suppressing blob (too short / noise)');
+        this.suppressNextBlob = false;
+      } else if (this.processCallback) {
         this.processCallback(audioBlob);
       }
       this.audioChunks = [];
@@ -73,47 +92,137 @@ class AudioCapture {
   }
 
   startStreamingMode(processCallback) {
-    log('INFO', 'Starting streaming mode');
+    log('INFO', 'Starting streaming mode with VAD');
     this.streamingMode = true;
     this.processCallback = processCallback;
-    this.startRecording();
-    this.scheduleNextCycle();
-    log('INFO', 'Streaming mode started with 2-second intervals');
+    this.voiceState = 'SILENT';
+    this.silenceStartTime = null;
+    this.recordingStartTime = null;
+
+    // Create persistent AudioContext + AnalyserNode
+    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = this.audioContext.createMediaStreamSource(this.micStream);
+    this.analyserNode = this.audioContext.createAnalyser();
+    this.analyserNode.fftSize = 2048;
+    source.connect(this.analyserNode);
+
+    // Safety: resume AudioContext if suspended by autoplay policy
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
+    }
+
+    // Start VAD monitoring loop
+    this.vadInterval = setInterval(() => this.vadLoop(), this.VAD_POLL_INTERVAL_MS);
+
+    log('INFO', 'Streaming mode started with VAD monitoring');
   }
 
-  scheduleNextCycle() {
-    this.streamingTimeout = setTimeout(() => {
-      if (!this.isRecording || !this.streamingMode) return;
+  getCurrentRMS() {
+    const dataArray = new Float32Array(this.analyserNode.fftSize);
+    this.analyserNode.getFloatTimeDomainData(dataArray);
 
-      try {
-        log('DEBUG', 'Cycling recording - stopping current');
-        this.mediaRecorder.stop();
-        setTimeout(() => {
-          if (this.streamingMode) {
-            log('DEBUG', 'Cycling recording - starting new');
-            this.startRecording();
-            this.scheduleNextCycle();
-          }
-        }, 100);
-      } catch (error) {
-        log('ERROR', 'Streaming cycle error, attempting recovery', { error: error.message });
-        if (this.streamingMode) {
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      sum += dataArray[i] * dataArray[i];
+    }
+    return Math.sqrt(sum / dataArray.length);
+  }
+
+  vadLoop() {
+    if (!this.streamingMode || !this.analyserNode) return;
+
+    const rms = this.getCurrentRMS();
+    const now = Date.now();
+    const isSpeech = rms >= this.SILENCE_THRESHOLD;
+
+    switch (this.voiceState) {
+      case 'SILENT':
+        if (isSpeech) {
+          this.voiceState = 'SPEAKING';
           this.startRecording();
-          this.scheduleNextCycle();
+          this.recordingStartTime = now;
+          log('DEBUG', 'VAD: voice onset detected', { rms: rms.toFixed(4) });
         }
-      }
-    }, 2000);
+        break;
+
+      case 'SPEAKING':
+        if (!isSpeech) {
+          this.voiceState = 'TRAILING_SILENCE';
+          this.silenceStartTime = now;
+          log('DEBUG', 'VAD: trailing silence started', { rms: rms.toFixed(4) });
+        } else if (this.recordingStartTime && (now - this.recordingStartTime >= this.MAX_CHUNK_DURATION_MS)) {
+          log('INFO', 'VAD: max chunk duration reached, sending chunk');
+          this.sendCurrentChunk();
+        }
+        break;
+
+      case 'TRAILING_SILENCE':
+        if (isSpeech) {
+          this.voiceState = 'SPEAKING';
+          this.silenceStartTime = null;
+          log('DEBUG', 'VAD: speech resumed during trailing silence', { rms: rms.toFixed(4) });
+        } else if (now - this.silenceStartTime >= this.TRAILING_SILENCE_MS) {
+          const chunkDuration = now - this.recordingStartTime;
+          if (chunkDuration >= this.MIN_CHUNK_DURATION_MS) {
+            log('INFO', 'VAD: silence threshold reached, sending chunk', {
+              silenceDuration: now - this.silenceStartTime,
+              chunkDuration
+            });
+            this.sendCurrentChunk();
+          } else {
+            log('DEBUG', 'VAD: chunk too short, discarding', { chunkDuration });
+            this.discardCurrentChunk();
+          }
+        } else if (this.recordingStartTime && (now - this.recordingStartTime >= this.MAX_CHUNK_DURATION_MS)) {
+          log('INFO', 'VAD: max duration during trailing silence, sending chunk');
+          this.sendCurrentChunk();
+        }
+        break;
+    }
+  }
+
+  sendCurrentChunk() {
+    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+      this.mediaRecorder.stop();
+      this.isRecording = false;
+    }
+    this.voiceState = 'SILENT';
+    this.silenceStartTime = null;
+    this.recordingStartTime = null;
+  }
+
+  discardCurrentChunk() {
+    this.suppressNextBlob = true;
+    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+      this.mediaRecorder.stop();
+      this.isRecording = false;
+    }
+    this.voiceState = 'SILENT';
+    this.silenceStartTime = null;
+    this.recordingStartTime = null;
   }
 
   stopStreamingMode() {
     log('INFO', 'Stopping streaming mode');
     this.streamingMode = false;
-    if (this.streamingTimeout) {
-      clearTimeout(this.streamingTimeout);
-      this.streamingTimeout = null;
-      log('DEBUG', 'Streaming timeout cleared');
+
+    if (this.vadInterval) {
+      clearInterval(this.vadInterval);
+      this.vadInterval = null;
     }
+
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
+      this.analyserNode = null;
+    }
+
     this.stopRecording();
+
+    this.voiceState = 'SILENT';
+    this.silenceStartTime = null;
+    this.recordingStartTime = null;
+
     log('INFO', 'Streaming mode stopped');
   }
 
